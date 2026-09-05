@@ -1,0 +1,16 @@
+# Supabase 集成所需的额外依赖
+
+# Supabase Python 客户端
+supabase>=2.0.0
+
+# 向量计算
+numpy>=1.24.0
+
+# PostgreSQL 适配器（如果需要直接连接数据库）
+psycopg2-binary>=2.9.0
+
+# 现有依赖（确认版本）
+openai>=1.0.0
+anthropic>=0.15.0
+python-dotenv>=1.0.0
+requests>=2.31.0

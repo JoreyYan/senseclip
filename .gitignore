@@ -1,0 +1,29 @@
+# secrets / local config
+.env
+.env.*
+!.env.example
+*.local.json
+cookies*.txt
+*.pem
+
+# python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+apps/api/data/
+apps/api/logs/
+apps/api/.cache/
+apps/api/projects/
+
+# node
+node_modules/
+dist/
+.vercel/
+
+# ide / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

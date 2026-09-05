@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 33% 98%;
+    --foreground: 20 20% 16%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 20 20% 16%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 20 20% 16%;
+
+    --primary: 25 95% 53%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 35 30% 93%;
+    --secondary-foreground: 20 20% 25%;
+
+    --muted: 35 20% 93%;
+    --muted-foreground: 20 10% 50%;
+
+    --accent: 35 40% 92%;
+    --accent-foreground: 20 20% 16%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 30 15% 88%;
+    --input: 30 15% 88%;
+    --ring: 25 95% 53%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 40 25% 96%;
+    --sidebar-foreground: 20 20% 16%;
+    --sidebar-primary: 25 95% 53%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 35 30% 90%;
+    --sidebar-accent-foreground: 20 20% 16%;
+    --sidebar-border: 30 15% 88%;
+    --sidebar-ring: 25 95% 53%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Markdown rendering styles for AI chat */
+.markdown-body h1 { font-size: 1.25rem; font-weight: 700; margin: 1rem 0 0.5rem; }
+.markdown-body h2 { font-size: 1.1rem; font-weight: 600; margin: 0.75rem 0 0.5rem; }
+.markdown-body h3 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0 0.25rem; }
+.markdown-body p { margin: 0.5rem 0; }
+.markdown-body p:first-child { margin-top: 0; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body ul, .markdown-body ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+.markdown-body li { margin: 0.25rem 0; }
+.markdown-body hr { border-color: hsl(var(--border)); margin: 0.75rem 0; }
+.markdown-body strong { color: hsl(var(--foreground)); font-weight: 600; }
+.markdown-body code { background: hsl(var(--accent)); padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.875rem; }
+.markdown-body pre { background: hsl(var(--secondary)); padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin: 0.5rem 0; }
+.markdown-body pre code { background: none; padding: 0; }
+.markdown-body a { color: hsl(var(--primary)); text-decoration: underline; }
+.markdown-body blockquote { border-left: 3px solid hsl(var(--primary) / 0.3); padding-left: 0.75rem; color: hsl(var(--muted-foreground)); margin: 0.5rem 0; }

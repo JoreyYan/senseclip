@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/sb-proxy/:path*", "destination": "https://plrbgyeltsiptgssgovl.supabase.co/:path*" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
