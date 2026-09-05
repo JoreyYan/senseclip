@@ -1,0 +1,50 @@
+# SenseClip 本地/自托管:应用服务(api / engine / web)
+#
+# 数据库、Auth、Storage 由 Supabase 提供:
+#   - 本地开发:先 `supabase start`(需要 Supabase CLI + Docker),再 `docker compose up --build`
+#   - 云端:填 .env 里的 SUPABASE_URL / SUPABASE_KEY 指向你的 Supabase 项目即可
+#
+# 容器内访问本机 Supabase 用 host.docker.internal(Linux 需 extra_hosts,见下)。
+
+services:
+  api:
+    build: .
+    env_file: .env
+    environment:
+      SERVICE_MODE: api
+      ENGINE_URL: http://engine:8000
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  engine:
+    build: .
+    env_file: .env
+    environment:
+      SERVICE_MODE: engine
+      PORT: "8000"
+    ports:
+      - "8001:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  web:
+    image: node:24-alpine
+    working_dir: /app
+    volumes:
+      - ./apps/web:/app
+    env_file: .env
+    environment:
+      # 浏览器侧直接访问宿主机端口
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-http://localhost:54321}
+      VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+    command: sh -c "npm install --no-audit --no-fund && npm run dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
