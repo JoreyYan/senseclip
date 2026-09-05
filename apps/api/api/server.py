@@ -87,7 +87,21 @@ async def _get_user_id(authorization: str = Header(None)) -> Optional[str]:
     except Exception:
         return None
 
-GUEST_DAILY_LIMIT = 5
+def _env_bool(name: str, default: bool = False) -> bool:
+    v = os.environ.get(name)
+    return default if v is None else v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# ---- 产品参数(全部可由环境变量覆盖;开源默认:不计费) ----
+BILLING_ENABLED = _env_bool("BILLING_ENABLED", False)   # false = 无积分/无 Stripe,纯自用
+GUEST_DAILY_LIMIT = _env_int("GUEST_DAILY_LIMIT", 5)     # 游客每日免费次数;0 = 不限
 
 _chat_logs_table_ok = False
 
@@ -126,7 +140,9 @@ def _save_chat_log(user_id: Optional[str], guest_ip: str, question: str, answer:
     return None
 
 def _check_guest_limit(guest_ip: str) -> bool:
-    """检查游客今日是否超过限制"""
+    """检查游客今日是否超过限制(GUEST_DAILY_LIMIT<=0 表示不限)"""
+    if GUEST_DAILY_LIMIT <= 0:
+        return True
     try:
         if not _supabase:
             return True
@@ -181,8 +197,8 @@ def _maybe_data(resp):
 
 
 # ── Credits / Billing helpers ──────────────────────────────────────
-SIGNUP_BONUS_CREDITS = 30
-LU_CONSULT_COST = 10  # 博主模式单次积分(全程 v4-pro 深度检索,成本 ~¥0.75/次)
+SIGNUP_BONUS_CREDITS = _env_int("SIGNUP_BONUS_CREDITS", 30)
+LU_CONSULT_COST = _env_int("CONSULT_COST", 10)  # 博主模式单次积分
 
 async def _ensure_credits(authorization: str, required: int = 1) -> tuple:
     """Verify user is authenticated and has >= required credits.
@@ -192,6 +208,8 @@ async def _ensure_credits(authorization: str, required: int = 1) -> tuple:
     user_id = await _get_user_id(authorization)
     if not user_id:
         raise HTTPException(status_code=401, detail="Please sign in to process videos")
+    if not BILLING_ENABLED:
+        return (user_id, None)
 
     row = _supabase_admin.table("user_credits") \
         .select("balance").eq("user_id", user_id).maybe_single().execute()
@@ -216,7 +234,9 @@ async def _ensure_credits(authorization: str, required: int = 1) -> tuple:
 
 
 def _deduct_credit(user_id: str, job_id: str, description: str, tx_type: str = "chat", amount: int = 1) -> int:
-    """Deduct `amount` credits. Returns new balance."""
+    """Deduct `amount` credits. Returns new balance(计费关闭时为 None,不落账)。"""
+    if not BILLING_ENABLED:
+        return None
     row = _supabase_admin.table("user_credits") \
         .select("balance").eq("user_id", user_id).maybe_single().execute()
     _rd = _maybe_data(row)
@@ -2018,6 +2038,8 @@ def _grant_credits(user_id: str, credits: int, tx_type: str, description: str,
 async def get_credits(authorization: str = Header(None)):
     """Get current user's credit balance and transaction history."""
     user_id = await _get_user_id(authorization)
+    if not BILLING_ENABLED:
+        return {"billing_enabled": False, "balance": None, "transactions": [], "lu_cost": 0}
     if not user_id:
         raise HTTPException(status_code=401, detail="Please sign in")
 
@@ -2044,7 +2066,7 @@ async def get_credits(authorization: str = Header(None)):
     return {"balance": balance, "transactions": txns.data or [],
             "plan": (row_data or {}).get("plan"),
             "sub_period_end": (row_data or {}).get("sub_period_end"),
-            "lu_cost": LU_CONSULT_COST}
+            "lu_cost": LU_CONSULT_COST, "billing_enabled": True}
 
 
 class CheckoutRequest(BaseModel):
@@ -2053,6 +2075,8 @@ class CheckoutRequest(BaseModel):
 @app.post("/api/billing/checkout")
 async def create_checkout(request: CheckoutRequest, authorization: str = Header(None)):
     """Create a Stripe Checkout Session(订阅 pro/max 或一次性 topup)。"""
+    if not BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="billing disabled")
     user_id = await _get_user_id(authorization)
     if not user_id:
         raise HTTPException(status_code=401, detail="Please sign in")
@@ -2089,6 +2113,8 @@ from fastapi import Request as _FastAPIRequest
 
 @app.post("/api/webhooks/stripe")
 async def stripe_webhook(request: _FastAPIRequest):
+    if not BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="billing disabled")
     """Handle Stripe webhook events for credit fulfillment."""
     import stripe
     stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -2727,7 +2753,7 @@ async def list_personas():
         out.append({"key": key, "label": cfg["label"],
                     "desc": cfg.get("desc") or "",
                     "avatar": cfg.get("avatar") or "/avatar.png",
-                    "cost": LU_CONSULT_COST})
+                    "cost": LU_CONSULT_COST if BILLING_ENABLED else 0})
     return {"personas": out}
 
 
@@ -3059,7 +3085,7 @@ async def consult_poll(job_id: str):
 
 # ==================== 广场:多人格圆桌讨论 ====================
 
-ROUNDTABLE_COST = 20  # 一场圆桌(2人格×2轮=4次发言)
+ROUNDTABLE_COST = _env_int("ROUNDTABLE_COST", 20)  # 一场圆桌(2人格×2轮)
 
 
 class RoundtableRequest(BaseModel):
@@ -3296,7 +3322,7 @@ async def roundtable_submit(request: RoundtableRequest, authorization: str = Hea
     return {"roundtable_id": rid, "cost": ROUNDTABLE_COST}
 
 
-ROUNDTABLE_ROUND_COST = 10  # 续聊每轮(两人各说一次)
+ROUNDTABLE_ROUND_COST = _env_int("ROUNDTABLE_ROUND_COST", 10)  # 续聊每轮
 
 
 class RoundtableContinueRequest(BaseModel):

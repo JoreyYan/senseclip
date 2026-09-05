@@ -25,7 +25,7 @@ function canEdit(role: string) {
 export function TopNav() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, role, credits, signOut } = useAuth();
+  const { user, role, credits, billingEnabled, signOut } = useAuth();
 
   const navItems = [
     { to: "/", label: "对话", icon: MessageSquare },
@@ -112,10 +112,12 @@ export function TopNav() {
               <p className="text-[10px] text-muted-foreground">{ROLE_ZH[role] || role}</p>
             </div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => navigate("/billing")}>
-              <CreditCard className="h-3.5 w-3.5 mr-2" />
-              <span className="text-xs">积分: {credits ?? "..."}</span>
-            </DropdownMenuItem>
+            {billingEnabled && (
+              <DropdownMenuItem onClick={() => navigate("/billing")}>
+                <CreditCard className="h-3.5 w-3.5 mr-2" />
+                <span className="text-xs">积分: {credits ?? "..."}</span>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               onClick={async () => {
                 await signOut();

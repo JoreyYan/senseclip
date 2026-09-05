@@ -11,6 +11,7 @@ interface AuthState {
   role: UserRole;
   loading: boolean;
   credits: number | null;
+  billingEnabled: boolean;
   refreshCredits: () => void;
   guestChatsUsed: number;
   guestChatLimit: number;
@@ -33,6 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<UserRole>("guest");
   const [loading, setLoading] = useState(true);
   const [credits, setCredits] = useState<number | null>(null);
+  const [billingEnabled, setBillingEnabled] = useState(true);
   const [guestChatsUsed, setGuestChatsUsed] = useState(() => {
     return parseInt(localStorage.getItem(GUEST_CHAT_KEY) || "0", 10);
   });
@@ -46,7 +48,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       if (res.ok) {
         const data = await res.json();
-        setCredits(data.balance);
+        if (data.billing_enabled === false) { setBillingEnabled(false); setCredits(null); }
+        else { setBillingEnabled(true); setCredits(data.balance); }
       }
     } catch { /* ignore */ }
   }, []);
@@ -156,6 +159,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role,
         loading,
         credits,
+        billingEnabled,
         refreshCredits,
         guestChatsUsed,
         guestChatLimit: GUEST_CHAT_LIMIT,

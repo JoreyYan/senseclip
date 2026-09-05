@@ -26,7 +26,10 @@ const TYPE_LABELS: Record<string, { text: string; color: string }> = {
 };
 
 export default function BillingPage() {
-  const { user, credits, refreshCredits } = useAuth();
+  const { user, credits, refreshCredits, billingEnabled } = useAuth();
+  if (!billingEnabled) {
+    return <div className="max-w-xl mx-auto p-10 text-center text-sm text-muted-foreground">此实例未启用计费(BILLING_ENABLED=false),所有功能免费使用。</div>;
+  }
   const [searchParams] = useSearchParams();
   const [transactions, setTransactions] = useState<CreditTransaction[]>([]);
   const [plan, setPlan] = useState<string | null>(null);

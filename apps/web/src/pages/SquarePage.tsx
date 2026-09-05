@@ -43,7 +43,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 }
 
 export default function SquarePage() {
-  const { user } = useAuth();
+  const { user, billingEnabled } = useAuth();
   const [personas, setPersonas] = useState<PersonaInfo[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [topic, setTopic] = useState("");
@@ -248,7 +248,7 @@ export default function SquarePage() {
               <Users className="h-4 w-4 text-primary" />
               广场 · 圆桌对谈
               <span className="text-[10px] font-normal text-muted-foreground">
-                选择嘉宾,抛一个话题,他们各自查库亮观点、逐轮交锋 · 20积分/场
+                选择嘉宾,抛一个话题,他们各自查库亮观点、逐轮交锋{billingEnabled ? " · 20积分/场" : ""}
               </span>
             </div>
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -329,7 +329,7 @@ export default function SquarePage() {
                     className="flex-1 rounded-lg border border-border/50 bg-background px-3 py-1.5 text-sm focus:outline-none focus:border-primary/50"
                   />
                   <Button size="sm" onClick={continueRound} className="gap-1.5">
-                    <Play className="h-3.5 w-3.5" /> 再聊一轮 · 10积分
+                    <Play className="h-3.5 w-3.5" /> 再聊一轮{billingEnabled ? " · 10积分" : ""}
                   </Button>
                 </div>
               </div>
