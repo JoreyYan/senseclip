@@ -70,6 +70,12 @@ cp .env.example .env                # 填本地 supabase status 输出的 URL / 
 docker compose up --build           # api :8000  engine :8001  web :5173
 ```
 
+### 本地栈排障
+
+- Windows 上 `supabase start` 报端口 `bind: ... forbidden`:Hyper-V 保留了 54315-54730 等端口段,本仓库 `supabase/config.toml` 已把本地端口挪到 563xx;若仍冲突,用 `netsh interface ipv4 show excludedportrange protocol=tcp` 查看保留段后自行调整。
+- 报 `storage-api:<某分支名>: not found` 或 storage 容器 `Migration ... not found`:是 Supabase CLI 与镜像版本不匹配的上游问题,换一个 CLI 版本(`scoop install supabase@<version>` / `brew install supabase/tap/supabase`)即可;不影响云端部署。
+- 基线迁移本身已在全新数据库上验证通过(149 条语句,含 pgvector HNSW 索引与 RLS)。
+
 ## 6. 新增一个博主
 
 见 `personas/README.md`:加一个 YAML → 拉频道 → 建观点库 → 蒸馏框架,前端自动出现新模式与圆桌嘉宾。

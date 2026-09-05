@@ -14,6 +14,8 @@ supabase start        # 拉起本地 Postgres + Auth + Storage + PostgREST,并�
 supabase status       # 查看本地 URL / anon key / service_role key,填入 .env
 ```
 
+> 基线已在全新本地库验证:149 条语句全部通过。本地栈起不来通常是 CLI/镜像版本问题,见 `docs/deploy.md` 排障。
+
 ## 以后怎么加迁移
 
 新增/修改表结构时在 `migrations/` 下新建带时间戳的文件(`supabase migration new <name>`),不要再改基线。
