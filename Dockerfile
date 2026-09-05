@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements_supabase.txt
 # 复制项目代码
 COPY apps/api/ ./apps/api/
 COPY railway.toml ./
+COPY personas/ ./personas/
 
 WORKDIR /app/apps/api
 

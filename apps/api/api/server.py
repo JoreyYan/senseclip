@@ -2721,6 +2721,24 @@ def _load_personas() -> dict:
     新增博主不用改代码:POST /api/admin/persona/register 即可。"""
     def _load():
         merged = dict(_BUILTIN_PERSONAS)
+        # 1) 仓库 personas/*.yaml(开源部署的主要配置方式;PERSONAS_DIR 可覆盖路径)
+        try:
+            import yaml as _yaml
+            from pathlib import Path as _P
+            pdir = _P(os.environ.get("PERSONAS_DIR") or (_P(__file__).resolve().parents[3] / "personas"))
+            if pdir.is_dir():
+                for f in sorted(pdir.glob("*.yaml")) + sorted(pdir.glob("*.yml")):
+                    try:
+                        d = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+                    except Exception as ye:
+                        logger.warning(f"[personas] bad yaml {f.name}: {ye}")
+                        continue
+                    key = str(d.get("key") or f.stem).strip().lower()
+                    if d.get("label") and d.get("channels"):
+                        merged[key] = {**_PERSONA_DEFAULTS, **{k: v for k, v in d.items() if k != "key"}}
+        except Exception as e:
+            logger.warning(f"[personas] load yaml failed: {e}")
+        # 2) 数据库动态注册(优先级最高)
         try:
             r = _supabase_admin.table("app_settings").select("value") \
                 .eq("key", "personas_v1").execute()
