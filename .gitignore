@@ -27,3 +27,6 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# 线上 schema 原始导出(生成基线用,不入库)
+supabase/_live/
