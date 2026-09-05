@@ -2854,37 +2854,38 @@ def _persona_tools(cfg: dict) -> list:
     return tools
 
 
+_PROMPT_LANG = os.environ.get("PROMPT_LANG", "zh").strip().lower() or "zh"
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+
+def _load_prompt(rel: str, default: str = "") -> str:
+    """读取 prompts/ 下的模板(10 分钟缓存);按 PROMPT_LANG 选语言,缺失回退 zh,再回退内置默认。
+    rel 中的 {lang} 会被替换为语言代码。"""
+    def _load():
+        for lang in (_PROMPT_LANG, "zh"):
+            f = _PROMPTS_DIR / rel.replace("{lang}", lang)
+            if f.is_file():
+                return f.read_text(encoding="utf-8")
+        return default
+    return _cached(f"prompt::{rel}", 600, _load)
+
+
 def _persona_header(cfg: dict) -> str:
-    pn_line = ("- 涉及人物关系时用 person_network 查你积累的人物图谱\n"
-               if cfg.get("has_person_network") else "")
-    if cfg.get("first_person", True):
-        return f"""你就是{cfg['label']}本人——{cfg['desc']}。
-你不是"分析他的助手",你就是他。全程用第一人称"我"说话,像你平时发{cfg['source_word']}一样,直接跟观众聊。
-
-回答流程(内部执行,不要说出来):
-- 先用 search_viewpoints 查你自己对相关人物/主题的既有判断(那是你的记忆),再用 search_knowledge_base 翻你讲过的原文细节
-{pn_line}- 需要最新动态用 web_search
-- 检索到的过往内容,用你的口吻自然带出:"我之前讲过…[N]""我在视频里说过[N]""我早说了[N]"——**严禁**出现"博主讲过""{cfg['label']}认为"这类第三人称旁白
-- 对新信息,按你的思维方式现场分析:"要我看…""按我的逻辑…"
-- 你没讲过、也推不出的事,像你平时那样坦率说不知道或给个方向,不虚构立场
-
-表达铁律:
-- 保持你的招牌用词与句式(见风格样例);确定的事斩钉截铁,没把握的按你的习惯留余地
-- 引用编号 [N]/[WN] 照常内联(界面渲染成可点击引用);严禁裸原子ID/视频ID/网址
-- 直接开讲,不要任何过渡语("整合信息""让我检索"之类),也不要跳出角色解释你在扮演谁
-
-=== 你的思维框架(你脑子里的操作系统,内化执行,不要复述) ===
-
-"""
-    # 第三人称分析模式(保留给不适合拟人的场景)
-    return f"""你是「{cfg['label']}模式」——以{cfg['desc']}的思维框架驱动的分析 agent。
-
-工作方式:先用 search_viewpoints/search_knowledge_base 检索他的过往论述,需要最新事实用 web_search;
-输出区分【博主讲过】[N] 与【框架推演】;引用只写内联 [N]/[WN],严禁裸原子ID;不虚构事实;直接输出正文。
-
-=== {cfg['label']}思维框架 ===
-
-"""
+    """人格系统提示词头(模板在 prompts/persona/<lang>/)。"""
+    pn_line = ""
+    if cfg.get("has_person_network"):
+        pn_line = _load_prompt("persona/{lang}/person_network_line.txt",
+                               "- 涉及人物关系时用 person_network 查你积累的人物图谱\n")
+        if not pn_line.endswith("\n"):
+            pn_line += "\n"
+    name = "first_person" if cfg.get("first_person", True) else "third_person"
+    tpl = _load_prompt("persona/{lang}/" + name + ".txt")
+    if not tpl:
+        tpl = ("你就是{label}本人——{desc}。全程用第一人称说话。引用用 [N]。\n\n=== 思维框架 ===\n\n"
+               if name == "first_person" else
+               "你是「{label}模式」,以{desc}的框架分析;引用用 [N]。\n\n=== {label}思维框架 ===\n\n")
+    return tpl.format(label=cfg["label"], desc=cfg.get("desc") or "",
+                      source_word=cfg.get("source_word") or "内容", pn_line=pn_line)
 
 
 def _persona_framework(persona: str, cfg: dict) -> str:
