@@ -2186,8 +2186,9 @@ _persona_builder = PersonaBuilder(_supabase_admin) if _supabase_admin else None
 
 
 def _check_admin_key(x_admin_key: str) -> None:
+    """管理端点鉴权:优先独立的 ADMIN_KEY;未设置时兼容旧部署的 SUPABASE_SERVICE。"""
     import hmac
-    expected = os.environ.get("SUPABASE_SERVICE", "")
+    expected = os.environ.get("ADMIN_KEY") or os.environ.get("SUPABASE_SERVICE", "")
     if not expected or not x_admin_key or not hmac.compare_digest(x_admin_key, expected):
         raise HTTPException(status_code=403, detail="forbidden")
 
@@ -2370,6 +2371,9 @@ async def apply_sql(request: ApplySqlRequest, x_admin_key: str = Header(None)):
     directly (cross-border network); Railway can. Guarded by the service_role
     key, which the caller must already hold to administer this system at all.
     """
+    if os.environ.get("ENABLE_ADMIN_SQL", "").lower() not in ("1", "true", "yes"):
+        raise HTTPException(status_code=404, detail="not found")
+    _check_admin_key(x_admin_key)
     import hmac
     expected = os.environ.get("SUPABASE_SERVICE", "")
     if not expected or not x_admin_key or not hmac.compare_digest(x_admin_key, expected):
