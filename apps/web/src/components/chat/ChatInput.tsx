@@ -171,7 +171,7 @@ export function ChatInput({ onSend, onStop, isLoading, disabled, disabledMessage
             ))}
             {isAgent && (
               <span className="text-[10px] text-muted-foreground ml-1">
-                {activeLabel}本人回答 · 查库+联网{activeCost > 0 ? ` · ${activeCost}积分/次` : ""} · 响应较慢
+                {activeLabel}本人口吻回答(AI 模拟,非本人) · 查库+联网{activeCost > 0 ? ` · ${activeCost}积分/次` : ""} · 响应较慢
               </span>
             )}
           </div>

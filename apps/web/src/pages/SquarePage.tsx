@@ -248,7 +248,7 @@ export default function SquarePage() {
               <Users className="h-4 w-4 text-primary" />
               广场 · 圆桌对谈
               <span className="text-[10px] font-normal text-muted-foreground">
-                选择嘉宾,抛一个话题,他们各自查库亮观点、逐轮交锋{billingEnabled ? " · 20积分/场" : ""}
+                选择嘉宾,抛一个话题,他们各自查库亮观点、逐轮交锋(AI 模拟,非本人){billingEnabled ? " · 20积分/场" : ""}
               </span>
             </div>
             <div className="flex items-center gap-1.5 flex-wrap">
