@@ -696,5 +696,19 @@ DROP POLICY IF EXISTS "Users can read own role" ON public."user_roles";
 CREATE POLICY "Users can read own role" ON public."user_roles" FOR SELECT TO public USING ((auth.uid() = user_id));
 
 -- storage buckets
-INSERT INTO storage.buckets (id, name, public) VALUES ('audio', 'audio', true) ON CONFLICT (id) DO NOTHING;
-INSERT INTO storage.buckets (id, name, public) VALUES ('subtitles', 'subtitles', true) ON CONFLICT (id) DO NOTHING;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='storage' AND table_name='buckets') THEN
+    INSERT INTO storage.buckets (id, name) VALUES ('audio', 'audio') ON CONFLICT (id) DO NOTHING;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='storage' AND table_name='buckets' AND column_name='public') THEN
+      UPDATE storage.buckets SET public = true WHERE id = 'audio';
+    END IF;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='storage' AND table_name='buckets') THEN
+    INSERT INTO storage.buckets (id, name) VALUES ('subtitles', 'subtitles') ON CONFLICT (id) DO NOTHING;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='storage' AND table_name='buckets' AND column_name='public') THEN
+      UPDATE storage.buckets SET public = true WHERE id = 'subtitles';
+    END IF;
+  END IF;
+END $$;
