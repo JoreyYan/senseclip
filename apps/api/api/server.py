@@ -2688,7 +2688,12 @@ def _is_censored(text: str) -> bool:
 def _has_tool_markup(text: str) -> bool:
     """DeepSeek 偶发把工具调用标记(DSML)当正文输出——视为坏答案。"""
     t = text or ""
-    return ("DSML" in t) or ("tool_calls>" in t) or ('invoke name="' in t)
+    if ("DSML" in t) or ("tool_calls>" in t) or ('invoke name="' in t):
+        return True
+    # 无工具场景下把工具名当正文写出来(如 "search_viewpoints:\n- 特朗普")也算坏答案
+    import re as _re
+    head = t.strip()[:120]
+    return bool(_re.match(r"^\s*(search_viewpoints|search_knowledge_base|web_search|query_person_network)\s*[:(（]", head))
 
 _BUILTIN_PERSONAS = {
     "lu": {
@@ -3200,6 +3205,7 @@ def _roundtable_turn(client, persona: str, cfg: dict, topic: str,
         "- 后续轮:抓住上一个人最刺你的那句话直接回——可以反问、可以怼、可以承认一半再反转,不要复述全场。\n"
         "- 你可以偶尔用自己发帖的方式说话(短行、换行、一个 emoji 或一句你常用的英文口头禅),但整体是在聊天。\n"
         "- 引用自己过往观点就在句尾放 [N]。不要开场白,不要'我认为如下'。\n"
+        "- 你这里没有任何工具可调用,需要的材料已经在上面;不要输出 search_viewpoints 之类的字样,直接开口说。\n"
     )
     transcript = "\n\n".join(
         f"{t['label']}(第{t['round']}轮): {t['content']}" for t in turns) or "(还没有人发言,你先来)"
