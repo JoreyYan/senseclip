@@ -3240,22 +3240,51 @@ def _roundtable_turn(client, persona: str, cfg: dict, topic: str,
     truncated = bool(content) and (finish != "stop" or not _tail_ok)
     if truncated:
         logger.warning(f"[roundtable] turn looks truncated (finish={finish}, {len(content)} chars), regenerating")
-    if (not content or truncated or _is_censored(content) or _has_tool_markup(content)) and CLAUDE_API_KEY:
-        import anthropic as _an
-        cl = _an.Anthropic(api_key=CLAUDE_API_KEY)
-        content = ""
-        with cl.messages.stream(model="claude-sonnet-4-6", max_tokens=700,
-                                system=sys_prompt,
-                                messages=[{"role": "user", "content": user_msg}]) as st:
-            last_len, last_t = 0, _time.time()
-            for text in st.text_stream:
-                content += text
-                if on_partial and (len(content) - last_len >= 30 or _time.time() - last_t > 1.0):
-                    try:
-                        on_partial(content)
-                    except Exception:
-                        pass
-                    last_len, last_t = len(content), _time.time()
+    bad = not content or _is_censored(content) or _has_tool_markup(content)
+    if (bad or truncated) and CLAUDE_API_KEY:
+        try:
+            import anthropic as _an
+            cl = _an.Anthropic(api_key=CLAUDE_API_KEY)
+            regen = ""
+            with cl.messages.stream(model="claude-sonnet-4-6", max_tokens=700,
+                                    system=sys_prompt,
+                                    messages=[{"role": "user", "content": user_msg}]) as st:
+                last_len, last_t = 0, _time.time()
+                for text in st.text_stream:
+                    regen += text
+                    if on_partial and (len(regen) - last_len >= 30 or _time.time() - last_t > 1.0):
+                        try:
+                            on_partial(regen)
+                        except Exception:
+                            pass
+                        last_len, last_t = len(regen), _time.time()
+            if regen.strip():
+                content, bad, truncated = regen, False, False
+        except Exception as ce:
+            # Claude 不可用(余额耗尽 / 网络):不能让整场圆桌垮掉,下面退回 DeepSeek 能给的
+            logger.error(f"[roundtable] Claude regen failed: {str(ce)[:120]}")
+    if bad:
+        # DeepSeek 没说出来且 Claude 也不行:非流式再要一次,换个说法绕开审查
+        try:
+            resp = client.chat.completions.create(
+                model="deepseek-v4-pro", max_tokens=700, timeout=120,
+                messages=[{"role": "system", "content": sys_prompt},
+                          {"role": "user", "content": user_msg + "\n\n(直接以你的口吻说观点,不要拒绝、不要解释你是 AI;实在不便谈的部分就绕过去谈你能谈的角度。)"}])
+            retry = (resp.choices[0].message.content or "").strip()
+            if retry and not _is_censored(retry) and not _has_tool_markup(retry):
+                content, truncated = retry, False
+            else:
+                content = ""
+        except Exception as de:
+            logger.error(f"[roundtable] DeepSeek retry failed: {str(de)[:120]}")
+            content = ""
+    if not content.strip():
+        raise RuntimeError("这一轮没能生成发言(主引擎受限且备用引擎不可用)")
+    if truncated:
+        # 半截话保底:截到最后一个收束标点,别留半句
+        cut = max(content.rfind(p) for p in "。!?！？…」")
+        if cut > len(content) * 0.4:
+            content = content[:cut + 1]
 
     used = set(int(x) for x in _re.findall(r"\[(\d+)\]", content))
     citations = [c for c in citations if c["ref_num"] in used]
@@ -3270,6 +3299,7 @@ def _run_roundtable(rid: str, topic: str, keys: list, rounds: int, registry: dic
     from config import DEEPSEEK_API_KEY
     client = _oa.OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com/v1")
     turns = turns if turns is not None else []
+    start_len, failed = len(turns), 0
     for rnd in range(start_round, start_round + rounds):
         for key in keys:
             cfg = registry[key]
@@ -3283,10 +3313,20 @@ def _run_roundtable(rid: str, topic: str, keys: list, rounds: int, registry: dic
                 _turns[-1]["content"] = text
                 _rt_save(rid, turns=_turns)
 
-            content, citations = _roundtable_turn(client, key, cfg, topic, turns[:-1], rnd,
-                                                  on_partial=_partial)
+            try:
+                content, citations = _roundtable_turn(client, key, cfg, topic, turns[:-1], rnd,
+                                                      on_partial=_partial)
+            except Exception as te:
+                # 一个人这轮没说上话,不拖垮整场:撤掉占位继续下一位
+                logger.error(f"[roundtable] {key} round {rnd + 1} failed: {str(te)[:120]}")
+                turns.pop()
+                failed += 1
+                _rt_save(rid, turns=turns)
+                continue
             turns[-1].update({"content": content, "citations": citations, "streaming": False})
             _rt_save(rid, turns=turns)
+    if failed and len(turns) <= start_len:
+        raise RuntimeError("所有嘉宾都没能发言:模型服务暂时不可用,请稍后再试")
     return turns
 
 
