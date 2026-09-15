@@ -2111,6 +2111,26 @@ async def create_checkout(request: CheckoutRequest, authorization: str = Header(
 
 from fastapi import Request as _FastAPIRequest
 
+def _stripe_plain(o):
+    """StripeObject / 嵌套结构 → 纯 dict(兼容 stripe-python 各版本)。"""
+    if isinstance(o, (dict, list, str, int, float, bool)) or o is None:
+        if isinstance(o, dict):
+            return {k: _stripe_plain(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [_stripe_plain(v) for v in o]
+        return o
+    for m in ("to_dict_recursive", "to_dict"):
+        if hasattr(o, m):
+            try:
+                return _stripe_plain(getattr(o, m)())
+            except Exception:
+                pass
+    try:
+        return json.loads(str(o))
+    except Exception:
+        return o
+
+
 @app.post("/api/webhooks/stripe")
 async def stripe_webhook(request: _FastAPIRequest):
     if not BILLING_ENABLED:
@@ -2141,6 +2161,9 @@ async def stripe_webhook(request: _FastAPIRequest):
             logger.error(f"[stripe] webhook rejected: sig={str(sig_err)[:60]} fetch={str(fetch_err)[:60]}")
             raise HTTPException(status_code=400, detail="Invalid signature")
 
+    # stripe-python 新版的 StripeObject 不再是 dict(没有 .get),统一转成普通 dict 再处理。
+    # ——这正是之前所有付款都没到账的根因:每个事件在 obj.get(...) 处 500,Stripe 一直重试失败。
+    event = _stripe_plain(event)
     etype = event["type"]
     obj = event["data"]["object"]
     logger.info(f"[stripe] event {event.get('id')} {etype} mode={obj.get('mode')} meta={obj.get('metadata')}")
@@ -2163,12 +2186,15 @@ async def stripe_webhook(request: _FastAPIRequest):
         try:
             if sub_id:
                 import stripe as _st
-                sub = _st.Subscription.retrieve(sub_id)
+                sub = _stripe_plain(_st.Subscription.retrieve(sub_id))
                 meta = sub.get("metadata", {}) or {}
                 try:
                     from datetime import datetime as _dt, timezone as _tz
-                    period_end = _dt.fromtimestamp(
-                        sub["current_period_end"], tz=_tz.utc).isoformat()
+                    # 新版 API 把 current_period_end 挪到了 items 里
+                    pe = sub.get("current_period_end") or \
+                        ((sub.get("items") or {}).get("data") or [{}])[0].get("current_period_end")
+                    if pe:
+                        period_end = _dt.fromtimestamp(pe, tz=_tz.utc).isoformat()
                 except Exception:
                     pass
         except Exception as ex:
