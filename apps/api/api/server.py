@@ -2123,13 +2123,27 @@ async def stripe_webhook(request: _FastAPIRequest):
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature", "")
 
+    event = None
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid signature")
+    except Exception as sig_err:
+        # 签名校验失败(最常见:STRIPE_WEBHOOK_SECRET 与 Stripe 后台端点不一致)。
+        # 兜底:用 secret key 按事件 id 去 Stripe 取回同一事件——伪造的 payload 取不到真事件,
+        # 且发放本身按 stripe_ref 幂等,所以安全;这样密钥配错也不会吞掉用户的付款。
+        try:
+            evt_id = (json.loads(payload or b"{}") or {}).get("id", "")
+            if not str(evt_id).startswith("evt_"):
+                raise ValueError("no event id")
+            event = stripe.Event.retrieve(evt_id)
+            logger.warning(f"[stripe] signature check failed ({str(sig_err)[:60]}); "
+                           f"verified {evt_id} via API instead — check STRIPE_WEBHOOK_SECRET")
+        except Exception as fetch_err:
+            logger.error(f"[stripe] webhook rejected: sig={str(sig_err)[:60]} fetch={str(fetch_err)[:60]}")
+            raise HTTPException(status_code=400, detail="Invalid signature")
 
     etype = event["type"]
     obj = event["data"]["object"]
+    logger.info(f"[stripe] event {event.get('id')} {etype} mode={obj.get('mode')} meta={obj.get('metadata')}")
 
     if etype == "checkout.session.completed":
         # 只处理一次性加油包;订阅的积分由 invoice.paid 发放(避免双发)
