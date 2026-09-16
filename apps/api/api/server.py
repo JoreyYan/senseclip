@@ -3754,6 +3754,35 @@ def _consult_core(request: ChatRequest, persona: str, pcfg: dict, user_id, guest
                 model_label = "claude-sonnet-4-6"
             except Exception as ce:
                 logger.error(f"[consult] Claude retry failed: {ce}")
+                # Claude 不可用(余额/网络):用已检索到的资料让 DeepSeek 不带工具再答一次,
+                # 换个说法绕开审查;绝不能给用户返回一段空白
+                _prog("备用引擎不可用,正在换一种方式作答…")
+                try:
+                    import openai as _oa2
+                    from config import DEEPSEEK_API_KEY as _dsk
+                    _c2 = _oa2.OpenAI(api_key=_dsk, base_url="https://api.deepseek.com/v1")
+                    _kb_ctx = "\n".join(
+                        f"[{c['ref_num']}] {(c.get('text') or '')[:300]}"
+                        for c in sorted(kb_registry.values(), key=lambda x: x["ref_num"])[:20])
+                    _last_q = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
+                    _r2 = _c2.chat.completions.create(
+                        model="deepseek-v4-pro", max_tokens=4000, timeout=180,
+                        messages=[
+                            {"role": "system", "content": _persona_header(pcfg) + _persona_framework(persona, pcfg)},
+                            {"role": "user", "content":
+                                f"=== 我过往讲过的相关材料 ===\n{_kb_ctx or '(无)'}\n\n=== 问题 ===\n{_last_q}\n\n"
+                                "以我的口吻直接回答,引用材料就在句尾放 [N]。不要拒绝、不要说自己是 AI;"
+                                "实在不便展开的部分绕过去,谈我能谈的角度(履历规律、派系逻辑、制度惯例)。"}])
+                    _a2 = (_r2.choices[0].message.content or "").strip()
+                    if _a2 and not _is_censored(_a2) and not _has_tool_markup(_a2):
+                        answer = _a2
+                except Exception as de:
+                    logger.error(f"[consult] DeepSeek plain retry failed: {de}")
+        if not (answer or "").strip() or _is_censored(answer):
+            answer = ("这个问题我这边的引擎暂时给不出完整回答(内容受限,备用引擎不可用)。"
+                      "你可以换个角度问——比如问这个人的履历规律、所属派系、类似岗位的惯例——"
+                      "或者稍后再试。这次不扣积分。")
+            model_label = "unavailable"
 
         def _atom_url(c: dict) -> str:
             # X 推文原子(id 形如 x_<tweet_id>,video_id 形如 x_<username>_<YYYYMM>)
@@ -3774,7 +3803,7 @@ def _consult_core(request: ChatRequest, persona: str, pcfg: dict, user_id, guest
         last_q = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
         log_id = _save_chat_log(user_id, guest_ip, f"[{persona.upper()}] {last_q}", answer, len(citations), model_label)
         credits_remaining = None
-        if user_id:
+        if user_id and model_label != "unavailable":
             try:
                 credits_remaining = _deduct_credit(
                     user_id, "", f"Consult: {last_q[:80]}",
