@@ -31,7 +31,9 @@ Turn any creator's public content into a first-person, citation-grounded AI pers
 | **第一人称** | 不是"分析他观点的助手",而是"我就是他":口吻、招牌用词、确定与犹豫的分寸都来自语料 |
 | **广场圆桌** | 多人格逐轮交锋,流式逐句显示、历史可回看、可续聊、观众可插话;发言被截断会自动重生成 |
 | **弹性模型链** | DeepSeek 主力,Claude 兜底:内容审查拒答、软拒绝("无法处理")、服务过载、中途断流、余额耗尽——五种失败全部自动切换,用户无感 |
-| **全自动内容摄入** | YouTube 频道每 20 分钟巡航,新视频自动转录(Whisper)、原子化、实体抽取、向量化;X 推文定时抓取;余额不足自动熔断 |
+| **全自动内容摄入** | YouTube 频道每 20 分钟巡航,新视频自动转录(Whisper)、原子化、实体抽取、向量化;可按频道设大模型主题过滤(只收某类内容);X 推文定时抓取;余额不足自动熔断,失败自动退避 |
+| **人格自动驾驶** | 新博主标 `autopilot: true`:内容入库 → 增量建观点库 → 服务端蒸馏思维框架 → 达标自动上线,全程无人值守 |
+| **提名活动** | 用户贴 YouTube / X 链接提名想对话的博主,同一频道自动合并计票,上线进度同步到提名榜 |
 | **可选计费** | 积分制 + Stripe 订阅/加油包,`BILLING_ENABLED=false` 即纯自用,前端自动隐藏计费入口 |
 | **国内网络友好** | 长请求改为提交 + 短轮询(跨境长连接被掐也不丢结果);Supabase 走同源反代 |
 
@@ -124,7 +126,8 @@ first_person: true
 | `POST /api/consult/submit` → `GET /api/consult/poll` | 人格模式(`persona` 参数);异步提交 + 轮询,轮询返回实时进度 |
 | `POST /api/roundtable/submit` → `GET /api/roundtable/{id}` | 广场圆桌;`POST /api/roundtable/{id}/continue` 续聊(可附观众插话) |
 | `GET /api/personas` | 当前可用人格(前端动态渲染) |
-| `POST /api/admin/backfill/start` · `/xpoller/start` · `/persona/build` · `/persona/register` | 引擎与人格管理(需 `X-Admin-Key`) |
+| `GET/POST /api/nominations` · `POST /api/nominations/{id}/vote` | 提名榜、提名博主、投票 |
+| `POST /api/admin/backfill/start` · `/xpoller/start` · `/persona/build` · `/persona/register` · `GET /persona/autopilot` | 引擎与人格管理(需 `X-Admin-Key`) |
 | `POST /api/feedback` · `/api/report-error` | 👍/👎 与一键异常上报(自动附带服务端诊断) |
 
 ## 项目结构
