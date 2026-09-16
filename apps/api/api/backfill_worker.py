@@ -30,6 +30,12 @@ CONCURRENCY = max(1, int(os.environ.get("BACKFILL_CONCURRENCY", "3")))  # 并发
 MAX_SECONDS = int(os.environ.get("BACKFILL_MAX_SECONDS", "5400"))
 
 
+def _is_cookie_error(err: str) -> bool:
+    e = (err or "").lower()
+    return ("cookies are no longer valid" in e or "sign in to confirm" in e
+            or "confirm you're not a bot" in e or "confirm you’re not a bot" in e)
+
+
 class BackfillWorker:
     def __init__(self, supabase):
         self.supabase = supabase
@@ -41,6 +47,8 @@ class BackfillWorker:
             "done_session": 0, "failed_session": 0,
             "current": "", "last_scan": "", "last_error": "",
         }
+        # 视频级失败退避:{video_id: (连续失败次数, 下次允许重试的时间戳)}
+        self._fail: dict = {}
 
     # ── 状态持久化(多频道)────────────────────────────────────
     def _save_state(self, enabled: bool, channels: list) -> None:
@@ -179,6 +187,7 @@ class BackfillWorker:
         except Exception as e:
             logger.warning(f"[backfill] job insert failed for {video_id}: {e}")
             return "submit_failed"
+        self._prune_jobs(url)
 
         async def _run():
             await asyncio.wait_for(run_ingestion(job_id, url), timeout=PER_VIDEO_TIMEOUT)
@@ -207,9 +216,48 @@ class BackfillWorker:
             err = (r.data[0].get("error_message") or "") if r.data else ""
             if "Insufficient Balance" in err or "402" in err:
                 return "no_balance"
+            if _is_cookie_error(err):
+                return "cookies_invalid"
             return "error"
         except Exception:
             return "unknown"
+
+    def _prune_jobs(self, url: str, keep: int = 3) -> None:
+        """同一视频只保留最近几条 job,防止重试把表撑爆。"""
+        try:
+            rows = (self.supabase.table("pipeline_jobs").select("id")
+                    .eq("youtube_url", url).order("created_at", desc=True)
+                    .limit(200).execute().data) or []
+            stale = [r["id"] for r in rows[keep:]]
+            if stale:
+                self.supabase.table("pipeline_jobs").delete().in_("id", stale).execute()
+        except Exception as e:
+            logger.warning(f"[backfill] prune failed for {url}: {str(e)[:80]}")
+
+    def _cookies_version(self) -> str:
+        try:
+            r = (self.supabase.table("app_settings").select("updated_at")
+                 .eq("key", "youtube_cookies").execute())
+            return (r.data[0].get("updated_at") or "") if r.data else ""
+        except Exception:
+            return ""
+
+    def _wait_or_cookies_change(self, seconds: int, cookies_ver: str) -> bool:
+        """等待 seconds;期间若用户重新上传 cookies 立即返回。返回 True 表示收到停止信号。"""
+        end = time.time() + seconds
+        while time.time() < end:
+            if self._stop.wait(min(60, max(1, end - time.time()))):
+                return True
+            if cookies_ver and self._cookies_version() != cookies_ver:
+                logger.info("[backfill] cookies updated — resuming now")
+                self._fail.clear()
+                return False
+        return False
+
+    def _backoff(self, vid: str) -> None:
+        n = self._fail.get(vid, (0, 0))[0] + 1
+        delay = min(RESCAN_MINUTES * 60 * (2 ** (n - 1)), 24 * 3600)
+        self._fail[vid] = (n, time.time() + delay)
 
     # ── 主循环(多频道)───────────────────────────────────────
     def _loop(self) -> None:
@@ -240,12 +288,21 @@ class BackfillWorker:
                     continue
 
                 done = self._get_done_set(channel_ids)
-                missing = [v for v in channel_ids if v not in done]
+                now_ts = time.time()
+                for v in list(self._fail):
+                    if v in done:
+                        self._fail.pop(v, None)
+                missing = [v for v in channel_ids
+                           if v not in done and self._fail.get(v, (0, 0))[1] <= now_ts]
+                backing_off = sum(1 for v in channel_ids
+                                  if v not in done and v not in missing)
+                self.status["backing_off"] = backing_off
                 self.status["missing"] = len(missing)
                 logger.info(f"[backfill] {len(done)}/{len(channel_ids)} done, {len(missing)} missing")
 
                 if not missing:
-                    self.status["phase"] = f"idle (rescan in {RESCAN_MINUTES}min)"
+                    self.status["phase"] = (f"idle (rescan in {RESCAN_MINUTES}min"
+                                            + (f", {backing_off} 个失败视频退避中" if backing_off else "") + ")")
                     if self._stop.wait(RESCAN_MINUTES * 60):
                         break
                     continue
@@ -254,6 +311,9 @@ class BackfillWorker:
                 self.status["phase"] = f"processing (x{CONCURRENCY})"
                 queue = list(missing)
                 in_flight: dict = {}
+                round_failed = 0
+                cookies_bad = False
+                cookies_ver = self._cookies_version()
                 with cf.ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
                     while (queue or in_flight) and not self._stop.is_set():
                         while queue and len(in_flight) < CONCURRENCY:
@@ -273,11 +333,21 @@ class BackfillWorker:
                             if outcome == "completed":
                                 self.status["done_session"] += 1
                                 self.status["missing"] = max(0, self.status["missing"] - 1)
+                            elif outcome == "cookies_invalid":
+                                # cookies 失效:部分视频无 cookies 仍可下,只退避这一个并提示重新上传
+                                self._backoff(vid)
+                                round_failed += 1
+                                cookies_bad = True
+                                self.status["failed_session"] += 1
+                                self.status["missing"] = max(0, self.status["missing"] - 1)
+                                self.status["last_error"] = "YouTube cookies 已失效,请在 /settings 重新上传"
                             elif outcome == "no_balance":
                                 # DeepSeek 没钱:视频回队列,稍后熔断暂停,避免空转刷失败
                                 queue.append(vid)
                                 balance_pause = True
                             else:
+                                self._backoff(vid)
+                                round_failed += 1
                                 self.status["failed_session"] += 1
                                 self.status["last_error"] = f"{vid}: {outcome}"
                                 self.status["missing"] = max(0, self.status["missing"] - 1)
@@ -289,7 +359,15 @@ class BackfillWorker:
                                 break
                             self.status["phase"] = f"processing (x{CONCURRENCY})"
                         self.status["current"] = ", ".join(in_flight.values())
-                # 一轮跑完（含失败的），回到顶部重扫，失败的下一轮自动重试
+                # 一轮跑完:有失败就先歇一个巡航周期再重扫(旧逻辑立刻重扫,
+                # 失败视频每 20 秒重下一次,一天刷上万条错误 job,还会加速 cookies 被 YouTube 作废)
+                if round_failed:
+                    self.status["phase"] = (f"waiting {RESCAN_MINUTES}min ({round_failed} failed this round"
+                                            + (", YouTube cookies 已失效,请在 /settings 重新上传" if cookies_bad else "") + ")")
+                    if cookies_bad:
+                        logger.warning("[backfill] YouTube cookies invalid — re-upload in /settings")
+                    if self._wait_or_cookies_change(RESCAN_MINUTES * 60, cookies_ver):
+                        break
             except Exception as e:
                 self.status["last_error"] = str(e)[:200]
                 logger.error(f"[backfill] loop error: {e}")
