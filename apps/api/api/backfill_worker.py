@@ -23,6 +23,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 STATE_KEY = "backfill_worker_v1"
+FILTER_CACHE_KEY = "backfill_topic_filter_v1"  # {channel: {video_id: 1/0}}
 RESCAN_MINUTES = int(os.environ.get('BACKFILL_RESCAN_MINUTES', '20'))  # 巡航重扫间隔(勤扫也让 cookies 保持活跃)
 PER_VIDEO_TIMEOUT = 3600  # 单视频硬超时（秒）
 CONCURRENCY = max(1, int(os.environ.get("BACKFILL_CONCURRENCY", "3")))  # 并发视频数
@@ -111,8 +112,13 @@ class BackfillWorker:
         return {"status": "stopping"}
 
     # ── 频道扫描 ──────────────────────────────────────────────
-    def _scan_channel(self, channel_url: str) -> list:
+    def _scan_channel(self, channel_url: str, max_seconds: int = None,
+                      topic_filter: str = "", channel_name: str = "") -> list:
+        """扫频道三个 tab。max_seconds 为频道级时长上限(None 用全局);
+        topic_filter 非空时按标题用大模型判断是否属于要收录的主题(结果缓存)。"""
         base = channel_url.rstrip("/")
+        limit = MAX_SECONDS if max_seconds is None else int(max_seconds)
+        titles: dict = {}
         cookies_text = ""
         try:
             r = self.supabase.table("app_settings").select("value").eq("key", "youtube_cookies").execute()
@@ -124,7 +130,7 @@ class BackfillWorker:
         ids: list = []
         skipped_long = 0
         with tempfile.TemporaryDirectory() as tmp:
-            cmd_base = ["yt-dlp", "--flat-playlist", "--print", "%(id)s|%(duration)s",
+            cmd_base = ["yt-dlp", "--flat-playlist", "--print", "%(id)s|%(duration)s|%(title)s",
                         "--extractor-args", "youtubetab:skip=authcheck"]
             if cookies_text:
                 ck = Path(tmp) / "cookies.txt"
@@ -139,7 +145,7 @@ class BackfillWorker:
                     )
                     tab_ids = []
                     for l in (result.stdout or "").splitlines():
-                        parts = l.strip().split("|", 1)
+                        parts = l.strip().split("|", 2)
                         vid = parts[0].strip()
                         if not vid or len(vid) != 11:
                             continue
@@ -149,7 +155,9 @@ class BackfillWorker:
                                 dur = float(parts[1])
                             except (ValueError, TypeError):
                                 dur = 0.0
-                        if MAX_SECONDS and dur > MAX_SECONDS:
+                        if len(parts) > 2:
+                            titles[vid] = parts[2].strip()
+                        if limit and dur > limit:
                             skipped_long += 1
                             continue
                         tab_ids.append(vid)
@@ -158,9 +166,66 @@ class BackfillWorker:
                 except Exception as e:
                     logger.warning(f"[backfill] scan {tab} failed: {e}")
         if skipped_long:
-            logger.info(f"[backfill] skipped {skipped_long} videos over {MAX_SECONDS}s")
+            logger.info(f"[backfill] skipped {skipped_long} videos over {limit}s")
             self.status["skipped_long"] = self.status.get("skipped_long", 0) + skipped_long
-        return list(dict.fromkeys(ids))
+        ids = list(dict.fromkeys(ids))
+        if topic_filter and ids:
+            keep = self._apply_topic_filter(channel_name or self._name_from_url(base),
+                                            topic_filter, ids, titles)
+            logger.info(f"[backfill] topic filter {channel_name}: {len(keep)}/{len(ids)} kept")
+            self.status.setdefault("filtered", {})[channel_name] = f"{len(keep)}/{len(ids)}"
+            ids = keep
+        return ids
+
+    # ── 主题过滤(按标题,大模型判断,结果缓存在 app_settings)──────────
+    def _apply_topic_filter(self, channel: str, criteria: str, ids: list, titles: dict) -> list:
+        cache_key = FILTER_CACHE_KEY
+        cache: dict = {}
+        try:
+            r = self.supabase.table("app_settings").select("value").eq("key", cache_key).execute()
+            if r.data:
+                cache = json.loads(r.data[0]["value"]) or {}
+        except Exception as e:
+            logger.warning(f"[backfill] filter cache load failed: {e}")
+        ch_cache: dict = cache.get(channel) or {}
+        todo = [v for v in ids if v not in ch_cache and titles.get(v)]
+        if todo:
+            try:
+                import openai as _oa
+                from config import DEEPSEEK_API_KEY
+                client = _oa.OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com/v1")
+            except Exception as e:
+                logger.warning(f"[backfill] filter client init failed: {e}")
+                client = None
+            for i in range(0, len(todo), 30) if client else []:
+                batch = todo[i:i + 30]
+                listing = "\n".join(f"{n + 1}. {titles[v][:120]}" for n, v in enumerate(batch))
+                prompt = (
+                    f"下面是一个 YouTube 频道的视频标题。收录标准:\n{criteria}\n\n"
+                    f"逐条判断是否收录。只输出 JSON:{{\"keep\": [要收录的序号]}}\n\n{listing}")
+                try:
+                    resp = client.chat.completions.create(
+                        model="deepseek-v4-flash", max_tokens=1000, timeout=120,
+                        messages=[{"role": "user", "content": prompt}],
+                        extra_body={"thinking": {"type": "disabled"}})  # 推理模式会把 token 耗光返回空
+                    import re as _re
+                    m = _re.search(r"\{.*\}", resp.choices[0].message.content or "", _re.S)
+                    if not m:
+                        raise ValueError("no json in filter response")
+                    keep_idx = set(int(x) for x in (json.loads(m.group(0)).get("keep") or []))
+                except Exception as e:
+                    logger.warning(f"[backfill] filter batch failed: {str(e)[:100]}")
+                    continue          # 失败的这批不写缓存,下轮再判
+                for n, v in enumerate(batch):
+                    ch_cache[v] = 1 if (n + 1) in keep_idx else 0
+                cache[channel] = ch_cache
+                try:
+                    self.supabase.table("app_settings").upsert(
+                        {"key": cache_key, "value": json.dumps(cache, ensure_ascii=False)}).execute()
+                except Exception as e:
+                    logger.warning(f"[backfill] filter cache save failed: {e}")
+        # 没有标题/尚未判定的视频先不收(下一轮再判),避免把不相关内容吞进库
+        return [v for v in ids if ch_cache.get(v) == 1]
 
     # ── 完成度 ────────────────────────────────────────────────
     def _get_done_set(self, channel_ids: list) -> set:
@@ -279,7 +344,8 @@ class BackfillWorker:
                 self.status["skipped_long"] = 0
                 vid_channel: dict = {}
                 for ch in channels:
-                    ids = self._scan_channel(ch["url"])
+                    ids = self._scan_channel(ch["url"], ch.get("max_seconds"),
+                                             ch.get("filter") or "", ch["name"])
                     logger.info(f"[backfill] {ch['name']}: {len(ids)} videos")
                     for v in ids:
                         vid_channel.setdefault(v, ch["name"])
