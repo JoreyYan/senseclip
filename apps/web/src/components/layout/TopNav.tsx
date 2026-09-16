@@ -36,11 +36,11 @@ export function TopNav() {
 
   return (
     <header className="h-11 shrink-0 flex items-center justify-between px-4 border-b border-border/30 bg-background">
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-2 sm:gap-6 min-w-0">
         <Link to="/" className="text-sm font-bold tracking-tight text-foreground">
           SenseClip
         </Link>
-        <nav className="flex items-center gap-1">
+        <nav className="flex items-center gap-0.5 sm:gap-1 overflow-x-auto">
           {navItems.map(({ to, label, icon: Icon }) => {
             const isActive = location.pathname === to;
             return (
@@ -48,13 +48,13 @@ export function TopNav() {
                 key={to}
                 to={to}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                  "flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors",
                   isActive
                     ? "bg-accent text-foreground"
                     : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
                 )}
               >
-                <Icon className="h-3.5 w-3.5" />
+                <Icon className="hidden sm:block h-3.5 w-3.5" />
                 {label}
               </Link>
             );
