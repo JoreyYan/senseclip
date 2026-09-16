@@ -77,10 +77,13 @@ class AudioService:
         def _run_ytdlp():
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
+                # 真正的失败原因在 ERROR 行;放最前面,否则入库截断到 500 字时只剩 WARNING
+                errs = [l for l in (result.stderr or "").splitlines() if l.startswith("ERROR")]
                 raise RuntimeError(
-                    f"yt-dlp 失败 (exit {result.returncode}):\n"
-                    f"STDOUT: {result.stdout[-1000:]}\n"
-                    f"STDERR: {result.stderr[-1000:]}"
+                    f"yt-dlp 失败 (exit {result.returncode}): "
+                    f"{' | '.join(errs)[:400] or '(no ERROR line)'}\n"
+                    f"STDERR: {result.stderr[-1000:]}\n"
+                    f"STDOUT: {result.stdout[-500:]}"
                 )
             return result
 

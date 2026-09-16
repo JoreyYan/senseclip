@@ -216,7 +216,14 @@ class BackfillWorker:
             err = (r.data[0].get("error_message") or "") if r.data else ""
             if "Insufficient Balance" in err or "402" in err:
                 return "no_balance"
-            if _is_cookie_error(err):
+            low = err.lower()
+            if "members-only" in low or "channel's members" in low:
+                return "members_only"
+            if "live event will begin" in low or "premieres in" in low or "premiere will begin" in low:
+                return "upcoming"
+            # yt-dlp 几乎每次都会顺带打印 "cookies are no longer valid" 的 WARNING,不能据此判断;
+            # 只有出现机器人验证/要求登录时才算 cookies 问题
+            if "sign in to confirm" in low or "not a bot" in low:
                 return "cookies_invalid"
             return "error"
         except Exception:
@@ -332,6 +339,15 @@ class BackfillWorker:
                                 outcome = f"error: {str(ex)[:60]}"
                             if outcome == "completed":
                                 self.status["done_session"] += 1
+                                self.status["missing"] = max(0, self.status["missing"] - 1)
+                            elif outcome == "members_only":
+                                # 会员专享:没有会员账号永远下不了,7 天后再看一眼(可能转公开)
+                                self._fail[vid] = (99, time.time() + 7 * 24 * 3600)
+                                self.status["missing"] = max(0, self.status["missing"] - 1)
+                                self.status["skipped_members"] = self.status.get("skipped_members", 0) + 1
+                            elif outcome == "upcoming":
+                                # 预约直播/首映还没开始:正常退避,开播结束后自然能下
+                                self._backoff(vid)
                                 self.status["missing"] = max(0, self.status["missing"] - 1)
                             elif outcome == "cookies_invalid":
                                 # cookies 失效:部分视频无 cookies 仍可下,只退避这一个并提示重新上传
