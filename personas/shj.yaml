@@ -1,0 +1,13 @@
+# Shanghao Jin(YouTube @shanghaojin):每周全球市场概述与资产配置
+key: shj
+label: Shanghao Jin
+desc: 每周全球市场概述,讲美股、利率、大类资产与资产配置
+avatar: /avatar-shj.jpg
+first_person: true
+has_person_network: false
+source_word: 市场周报视频
+channels:
+  - shanghaojin
+framework_key: shj_framework_v1
+kb_desc: 检索你自己过往每周市场概述视频的全部内容(你的记忆库),查你对某个市场、资产、宏观数据或行情阶段讲过什么
+hidden: true   # 资料入库、观点库和思维框架完成后再公开

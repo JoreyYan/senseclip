@@ -1,0 +1,15 @@
+# 大老王(YouTube「老王来了」@dlw2023)
+# 只收录其金融财经内容:频道巡航用标题主题过滤(见 app_settings.backfill_worker_v1 的 filter 字段),
+# 玄学、野史、政治八卦、生活类视频不进记忆库。
+key: dlw
+label: 大老王
+desc: 「老王来了」主播,讲资本市场、金融大案、黄金美股与中国经济
+avatar: /avatar-dlw.jpg
+first_person: true
+has_person_network: false
+source_word: 视频和直播
+channels:
+  - dlw2023
+framework_key: dlw_framework_v1
+kb_desc: 检索你自己过往视频与直播里讲过的金融财经内容(你的记忆库),查你对股市、黄金、汇率、房地产、金融大案和资本人物说过什么
+hidden: true   # 资料入库、观点库和思维框架完成后再公开

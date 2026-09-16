@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -308,6 +308,7 @@ class ChatRequest(BaseModel):
     video_ids: Optional[List[str]] = None  # None = search all videos
     attachments: Optional[List[ChatAttachment]] = None  # 附加于最后一条用户消息
     persona: Optional[str] = None  # 咨询模式人格: lu(默认) / sun
+    preview_key: Optional[str] = None  # 管理员预览尚未公开(hidden)的人格
     full_pro: Optional[bool] = None  # 测试用:检索轮也用 v4-pro(默认 flash)
 
 class PersonRenameRequest(BaseModel):
@@ -2799,6 +2800,19 @@ def _load_personas() -> dict:
     return _cached("personas_registry", 600, _load)
 
 
+def _public_personas() -> dict:
+    """对外可见的人格(hidden: true 的人格资料还在准备,不出现在前端和圆桌)。"""
+    return {k: v for k, v in _load_personas().items() if not v.get("hidden")}
+
+
+def _is_admin_key(key: str) -> bool:
+    try:
+        _check_admin_key(key)
+        return True
+    except HTTPException:
+        return False
+
+
 _PERSONA_DEFAULTS = {
     "avatar": "/avatar.png",
     "has_person_network": False,
@@ -2812,7 +2826,7 @@ _PERSONA_DEFAULTS = {
 async def list_personas():
     """公开人格列表,前端模式选择器动态渲染(新增博主零前端改动)。"""
     out = []
-    for key, cfg in _load_personas().items():
+    for key, cfg in _public_personas().items():
         out.append({"key": key, "label": cfg["label"],
                     "desc": cfg.get("desc") or "",
                     "avatar": cfg.get("avatar") or "/avatar.png",
@@ -3077,7 +3091,8 @@ async def _consult_auth(request: ChatRequest, authorization, x_forwarded_for):
     """咨询模式公共前置:人格校验 + 鉴权 + 游客限流/积分检查。"""
     persona = (request.persona or "lu").strip().lower()
     registry = _load_personas()
-    if persona not in registry:
+    if persona not in registry or (registry[persona].get("hidden")
+                                   and not _is_admin_key(request.preview_key or "")):
         raise HTTPException(status_code=400, detail=f"unknown persona: {persona}")
     pcfg = registry[persona]
 
@@ -3393,7 +3408,7 @@ async def roundtable_submit(request: RoundtableRequest, authorization: str = Hea
     topic = (request.topic or "").strip()
     if not topic:
         raise HTTPException(status_code=400, detail="topic required")
-    registry = _load_personas()
+    registry = _public_personas()
     keys = [k for k in (request.personas or list(registry.keys())) if k in registry]
     if len(keys) < 2:
         raise HTTPException(status_code=400, detail="至少需要两个人格")
@@ -3894,6 +3909,187 @@ async def submit_feedback(request: FeedbackRequest):
     except Exception as e:
         logger.warning(f"[feedback] failed: {e}")
         raise HTTPException(status_code=500, detail=str(e)[:200])
+
+
+# ==================== 提名活动:用户提名想上线的博主 ====================
+
+NOMINATION_DAILY_LIMIT = _env_int("NOMINATION_DAILY_LIMIT", 10)
+_NOMINATION_STATUS_ZH = {"pending": "待评估", "accepted": "已采纳", "building": "制作中",
+                         "live": "已上线", "rejected": "未采纳"}
+
+
+def _normalize_creator_url(raw: str):
+    """把 YouTube 频道 / X 账号链接规范化为 (platform, handle, canonical_url);不支持的返回 None。"""
+    import re as _re
+    from urllib.parse import urlparse
+    u = (raw or "").strip()
+    if not u:
+        return None
+    if u.startswith("@") and _re.fullmatch(r"@[\w.\-]{2,60}", u):
+        return ("youtube", u[1:].lower(), f"https://www.youtube.com/{u}")
+    if not _re.match(r"^https?://", u, _re.I):
+        u = "https://" + u
+    try:
+        p = urlparse(u)
+    except Exception:
+        return None
+    host = (p.netloc or "").lower().split(":")[0]
+    if host.startswith("www.") or host.startswith("m."):
+        host = host.split(".", 1)[1]
+    parts = [x for x in (p.path or "").split("/") if x]
+    if host in ("youtube.com", "youtu.be") and parts:
+        first = parts[0]
+        if first.startswith("@") and len(first) > 1:
+            h = first[1:]
+            return ("youtube", h.lower(), f"https://www.youtube.com/@{h}")
+        if first == "channel" and len(parts) > 1 and _re.fullmatch(r"UC[\w\-]{20,}", parts[1]):
+            return ("youtube", parts[1], f"https://www.youtube.com/channel/{parts[1]}")
+        if first in ("c", "user") and len(parts) > 1:
+            return ("youtube", parts[1].lower(), f"https://www.youtube.com/{first}/{parts[1]}")
+        return None
+    if host in ("x.com", "twitter.com") and parts:
+        name = parts[0]
+        if name.lower() in ("i", "home", "intent", "search", "explore", "share", "hashtag", "settings"):
+            return None
+        if _re.fullmatch(r"\w{1,15}", name):
+            return ("x", name.lower(), f"https://x.com/{name}")
+    return None
+
+
+def _voter_key(user_id, guest_ip: str) -> str:
+    return f"u:{user_id}" if user_id else f"ip:{guest_ip}"
+
+
+def _recount_votes(nid: str) -> int:
+    r = _supabase_admin.table("persona_nomination_votes").select("voter", count="exact") \
+        .eq("nomination_id", nid).limit(1).execute()
+    n = int(r.count or 0)
+    _supabase_admin.table("persona_nominations").update(
+        {"votes": n, "updated_at": datetime.utcnow().isoformat()}).eq("id", nid).execute()
+    return n
+
+
+class NominationRequest(BaseModel):
+    name: str
+    url: str
+    reason: Optional[str] = ""
+
+
+class NominationStatusRequest(BaseModel):
+    status: str
+    note: Optional[str] = ""
+
+
+@app.get("/api/nominations")
+async def list_nominations(authorization: str = Header(None), x_forwarded_for: str = Header(None)):
+    """提名榜(按票数)+ 即将上线的人格。"""
+    user_id = await _get_user_id(authorization)
+    voter = _voter_key(user_id, (x_forwarded_for or "unknown").split(",")[0].strip())
+    rows = []
+    try:
+        rows = (_supabase_admin.table("persona_nominations")
+                .select("id,name,platform,url,handle,reason,votes,status,created_at")
+                .neq("status", "rejected").order("votes", desc=True)
+                .order("created_at", desc=True).limit(100).execute().data) or []
+        voted = set()
+        if rows:
+            vr = (_supabase_admin.table("persona_nomination_votes").select("nomination_id")
+                  .eq("voter", voter).in_("nomination_id", [r["id"] for r in rows]).execute().data) or []
+            voted = {v["nomination_id"] for v in vr}
+        for r in rows:
+            r["voted"] = r["id"] in voted
+            r["status_label"] = _NOMINATION_STATUS_ZH.get(r["status"], r["status"])
+            r["reason"] = (r.get("reason") or "")[:200]
+    except Exception as e:
+        logger.warning(f"[nominate] list failed: {e}")
+    coming = [{"key": k, "label": v["label"], "desc": v.get("desc") or "",
+               "avatar": v.get("avatar") or "/avatar.png"}
+              for k, v in _load_personas().items() if v.get("hidden")]
+    live = [{"key": k, "label": v["label"], "avatar": v.get("avatar") or "/avatar.png"}
+            for k, v in _public_personas().items()]
+    return {"nominations": rows, "coming_soon": coming, "live": live}
+
+
+@app.post("/api/nominations")
+async def create_nomination(request: NominationRequest, authorization: str = Header(None),
+                            x_forwarded_for: str = Header(None)):
+    """提名一位博主;同一频道/账号已被提名则计为投一票。"""
+    user_id = await _get_user_id(authorization)
+    guest_ip = (x_forwarded_for or "unknown").split(",")[0].strip()
+    name = (request.name or "").strip()[:40]
+    if not name:
+        raise HTTPException(status_code=400, detail="请填写博主名字")
+    norm = _normalize_creator_url(request.url)
+    if not norm:
+        raise HTTPException(status_code=400, detail="请贴 YouTube 频道链接(如 youtube.com/@xxx)或 X 账号链接(如 x.com/xxx)")
+    platform, handle, url = norm
+    voter = _voter_key(user_id, guest_ip)
+
+    existing = (_supabase_admin.table("persona_nominations").select("id,name,status")
+                .eq("platform", platform).eq("handle", handle).execute().data) or []
+    if existing:
+        nid = existing[0]["id"]
+        try:
+            _supabase_admin.table("persona_nomination_votes").insert(
+                {"nomination_id": nid, "voter": voter}).execute()
+            votes = _recount_votes(nid)
+            return {"ok": True, "merged": True, "id": nid, "name": existing[0]["name"], "votes": votes}
+        except Exception:
+            return {"ok": True, "merged": True, "already_voted": True, "id": nid, "name": existing[0]["name"]}
+
+    # 频率限制:每人每天最多提名 N 位
+    try:
+        since = (datetime.utcnow() - timedelta(days=1)).isoformat()
+        q = _supabase_admin.table("persona_nominations").select("id", count="exact").gte("created_at", since)
+        q = q.eq("user_id", user_id) if user_id else q.eq("guest_ip", guest_ip)
+        if int(q.limit(1).execute().count or 0) >= NOMINATION_DAILY_LIMIT:
+            raise HTTPException(status_code=429, detail="今天提名次数已达上限,明天再来")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[nominate] rate check failed: {e}")
+
+    try:
+        ins = _supabase_admin.table("persona_nominations").insert({
+            "name": name, "platform": platform, "url": url, "handle": handle,
+            "reason": (request.reason or "").strip()[:300] or None,
+            "user_id": user_id, "guest_ip": None if user_id else guest_ip, "votes": 1,
+        }).execute()
+        nid = ins.data[0]["id"]
+        _supabase_admin.table("persona_nomination_votes").insert(
+            {"nomination_id": nid, "voter": voter}).execute()
+    except Exception as e:
+        logger.warning(f"[nominate] insert failed: {e}")
+        raise HTTPException(status_code=500, detail="提名失败,请稍后再试")
+    logger.info(f"[nominate] new: {name} {url}")
+    return {"ok": True, "merged": False, "id": nid, "votes": 1}
+
+
+@app.post("/api/nominations/{nid}/vote")
+async def vote_nomination(nid: str, authorization: str = Header(None), x_forwarded_for: str = Header(None)):
+    user_id = await _get_user_id(authorization)
+    voter = _voter_key(user_id, (x_forwarded_for or "unknown").split(",")[0].strip())
+    found = (_supabase_admin.table("persona_nominations").select("id")
+             .eq("id", nid).execute().data) or []
+    if not found:
+        raise HTTPException(status_code=404, detail="提名不存在")
+    try:
+        _supabase_admin.table("persona_nomination_votes").insert(
+            {"nomination_id": nid, "voter": voter}).execute()
+    except Exception:
+        return {"ok": True, "already_voted": True}
+    return {"ok": True, "votes": _recount_votes(nid)}
+
+
+@app.post("/api/admin/nominations/{nid}/status")
+async def set_nomination_status(nid: str, request: NominationStatusRequest, x_admin_key: str = Header(None)):
+    _check_admin_key(x_admin_key)
+    if request.status not in _NOMINATION_STATUS_ZH:
+        raise HTTPException(status_code=400, detail="bad status")
+    r = _supabase_admin.table("persona_nominations").update({
+        "status": request.status, "admin_note": (request.note or "")[:300] or None,
+        "updated_at": datetime.utcnow().isoformat()}).eq("id", nid).execute()
+    return {"ok": bool(r.data)}
 
 
 # ==================== Chat Endpoints ====================
