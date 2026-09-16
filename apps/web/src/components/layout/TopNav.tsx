@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { MessageSquare, GitGraph, Users, User, LogOut, LogIn, Video, Upload, Settings, ChevronDown, CreditCard } from "lucide-react";
+import { MessageSquare, GitGraph, Users, Vote, User, LogOut, LogIn, Video, Upload, Settings, ChevronDown, CreditCard } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
@@ -31,6 +31,7 @@ export function TopNav() {
     { to: "/", label: "对话", icon: MessageSquare },
     { to: "/square", label: "广场", icon: Users },
     { to: "/person-network", label: "群英图", icon: GitGraph },
+    { to: "/nominate", label: "提名", icon: Vote },
   ];
 
   return (
