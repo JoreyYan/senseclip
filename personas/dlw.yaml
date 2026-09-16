@@ -12,4 +12,5 @@ channels:
   - dlw2023
 framework_key: dlw_framework_v1
 kb_desc: 检索你自己过往视频与直播里讲过的金融财经内容(你的记忆库),查你对股市、黄金、汇率、房地产、金融大案和资本人物说过什么
-hidden: true   # 资料入库、观点库和思维框架完成后再公开
+hidden: true      # 资料入库、观点库和思维框架完成后由自动驾驶公开
+autopilot: true   # 引擎自动:增量建观点库 → 蒸馏框架 → 达标后公开

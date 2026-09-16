@@ -5,7 +5,9 @@
   观点条目 {topic, stance, reasoning, confidence, quote, atom_ids}
   风格金句 {quote, context, atom_id}
 - bge-m3 向量化后写入 persona_viewpoints / persona_quotes
-- 断点续跑:进度存 app_settings(persona_build_v1),按 offset 翻页
+- 断点续跑:进度存 app_settings(persona_build_v1)
+  新人格按「已处理视频」记录进度(done_videos),频道新视频入库后再跑一次只处理新增部分;
+  lu/sun 早期按原子 offset 建库,保持原方式续跑
 """
 
 import json
@@ -70,7 +72,10 @@ class PersonaBuilder:
         return {}
 
     # ── 控制 ──────────────────────────────────────────────────
-    def start(self, persona: str, channels: list) -> dict:
+    def is_running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def start(self, persona: str, channels: list, label: str = "") -> dict:
         if self._thread and self._thread.is_alive():
             return {"status": "already_running", **self.status}
         state = self.load_state()
@@ -82,7 +87,7 @@ class PersonaBuilder:
         self.status.update({"running": True, "persona": persona, "phase": "starting",
                             "last_error": "", "viewpoints": 0, "quotes": 0})
         self._thread = threading.Thread(
-            target=self._run, args=(persona, channels), daemon=True)
+            target=self._run, args=(persona, channels, label), daemon=True)
         self._thread.start()
         return {"status": "started", **self.status}
 
@@ -91,7 +96,7 @@ class PersonaBuilder:
         return {"status": "stopping"}
 
     # ── 主流程 ────────────────────────────────────────────────
-    def _run(self, persona: str, channels: list) -> None:
+    def _run(self, persona: str, channels: list, label: str = "") -> None:
         try:
             from config import DEEPSEEK_API_KEY
             import sys
@@ -119,9 +124,14 @@ class PersonaBuilder:
             self.status["total"] = total
 
             state = self.load_state()
-            offset = (state.get(persona) or {}).get("offset", 0)
+            pstate = state.get(persona) or {}
+            label = label or {"lu": "鲁社长", "sun": "孙宇晨(孙哥)"}.get(persona, persona)
+            legacy = persona in ("lu", "sun") and "offset" in pstate and "done_videos" not in pstate
+            if not legacy:
+                self._run_by_video(client, vec, persona, label, vids)
+                return
+            offset = pstate.get("offset", 0)
             self.status["processed"] = offset
-            label = "鲁社长" if persona == "lu" else "孙宇晨(孙哥)"
             logger.info(f"[persona] build {persona}: {total} atoms, resume at {offset}")
 
             while offset < total and not self._stop.is_set():
@@ -156,6 +166,52 @@ class PersonaBuilder:
             self.status.update({"running": False, "phase": "error",
                                 "last_error": str(e)[:200]})
             logger.error(f"[persona] build failed: {e}")
+
+    def _run_by_video(self, client, vec, persona: str, label: str, vids: list) -> None:
+        """按视频增量构建:只处理还没抽取过的视频,每完成一个视频落一次进度。"""
+        state = self.load_state()
+        done = set((state.get(persona) or {}).get("done_videos") or [])
+        todo = [v for v in vids if v not in done]
+        self.status.update({"total": len(vids), "processed": len(done), "unit": "videos"})
+        logger.info(f"[persona] build {persona} ({label}): {len(done)}/{len(vids)} videos done, {len(todo)} to go")
+        for vid in todo:
+            if self._stop.is_set():
+                break
+            self.status["phase"] = f"extracting video {len(done) + 1}/{len(vids)}"
+            atoms, start = [], 0
+            while True:
+                page = (self.supabase.table("atoms").select("id,merged_text")
+                        .eq("video_id", vid).order("id").range(start, start + 999).execute().data) or []
+                atoms.extend(page)
+                if len(page) < 1000:
+                    break
+                start += 1000
+            interrupted = False
+            for i in range(0, len(atoms), BATCH_ATOMS):
+                if self._stop.is_set():
+                    interrupted = True
+                    break
+                batch = atoms[i:i + BATCH_ATOMS]
+                try:
+                    self._process_batch(client, vec, persona, label, batch)
+                except Exception as e:
+                    self.status["last_error"] = str(e)[:150]
+                    logger.warning(f"[persona] batch failed ({vid}): {str(e)[:120]}")
+                    if "Insufficient Balance" in str(e):
+                        self.status["phase"] = "paused (no balance)"
+                        if self._stop.wait(1800):
+                            interrupted = True
+                            break
+            if interrupted:
+                break
+            done.add(vid)
+            state = self.load_state()
+            state.setdefault(persona, {})["done_videos"] = sorted(done)
+            self._save_state(state)
+            self.status["processed"] = len(done)
+        finished = len(done) >= len(vids)
+        self.status.update({"running": False, "phase": "done" if finished else "stopped"})
+        logger.info(f"[persona] build {persona} finished: {len(done)}/{len(vids)} videos")
 
     def _process_batch(self, client, vec, persona: str, label: str, batch: list) -> None:
         atoms_text = "\n\n".join(

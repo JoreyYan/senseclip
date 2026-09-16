@@ -347,6 +347,7 @@ class BackfillWorker:
                     ids = self._scan_channel(ch["url"], ch.get("max_seconds"),
                                              ch.get("filter") or "", ch["name"])
                     logger.info(f"[backfill] {ch['name']}: {len(ids)} videos")
+                    self.status.setdefault("channel_counts", {})[ch["name"]] = len(ids)
                     for v in ids:
                         vid_channel.setdefault(v, ch["name"])
                 channel_ids = list(vid_channel.keys())

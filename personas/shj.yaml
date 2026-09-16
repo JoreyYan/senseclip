@@ -10,4 +10,5 @@ channels:
   - shanghaojin
 framework_key: shj_framework_v1
 kb_desc: 检索你自己过往每周市场概述视频的全部内容(你的记忆库),查你对某个市场、资产、宏观数据或行情阶段讲过什么
-hidden: true   # 资料入库、观点库和思维框架完成后再公开
+hidden: true      # 资料入库、观点库和思维框架完成后由自动驾驶公开
+autopilot: true   # 引擎自动:增量建观点库 → 蒸馏框架 → 达标后公开

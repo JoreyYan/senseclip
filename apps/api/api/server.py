@@ -2250,6 +2250,7 @@ _x_poller = XPoller(_supabase_admin, _TW_KEY) if _supabase_admin else None
 # ── 人格观点库构建 worker ────────────────────────────────────────
 from api.persona_builder import PersonaBuilder
 _persona_builder = PersonaBuilder(_supabase_admin) if _supabase_admin else None
+_persona_autopilot = None  # engine 启动时创建(依赖 _load_personas,定义在后面)
 
 
 def _check_admin_key(x_admin_key: str) -> None:
@@ -2351,7 +2352,20 @@ async def persona_build(request: PersonaBuildRequest, x_admin_key: str = Header(
     pcfg = _load_personas().get(request.persona)
     if not pcfg:
         raise HTTPException(status_code=400, detail=f"unknown persona: {request.persona}")
-    return _persona_builder.start(request.persona, pcfg["channels"])
+    return _persona_builder.start(request.persona, pcfg["channels"], pcfg.get("label") or "")
+
+
+@app.get("/api/admin/persona/autopilot")
+async def persona_autopilot_status(x_admin_key: str = Header(None)):
+    _check_admin_key(x_admin_key)
+    if SERVICE_MODE != "engine" and ENGINE_URL:
+        return _proxy_to_engine("GET", "/api/admin/persona/autopilot",
+                                headers={"X-Admin-Key": x_admin_key})
+    return {
+        "autopilot": _persona_autopilot.status if _persona_autopilot else None,
+        "builder": _persona_builder.status if _persona_builder else None,
+        "channel_counts": (_backfill_worker.status.get("channel_counts") if _backfill_worker else None),
+    }
 
 
 @app.post("/api/admin/persona/stop")
@@ -2416,6 +2430,17 @@ async def _resume_backfill_on_boot():
                         f"{', '.join(c['name'] for c in channels) or state.get('channel_url')}")
     except Exception as e:
         logger.warning(f"[backfill] boot resume failed: {e}")
+    # 人格自动驾驶:新博主资料入库后自动建观点库、蒸馏框架、达标后公开
+    global _persona_autopilot
+    try:
+        from api.persona_autopilot import PersonaAutopilot
+        if _supabase_admin and _persona_builder:
+            _persona_autopilot = PersonaAutopilot(_supabase_admin, _persona_builder,
+                                                  _backfill_worker, _load_personas)
+            _persona_autopilot.start()
+            logger.info("[autopilot] started")
+    except Exception as e:
+        logger.warning(f"[autopilot] start failed: {e}")
     # X 推文 poller 同样自动恢复
     if _x_poller:
         try:
@@ -2796,6 +2821,17 @@ def _load_personas() -> dict:
                         merged[k] = {**_PERSONA_DEFAULTS, **v}
         except Exception as e:
             logger.warning(f"[personas] load dynamic failed: {e}")
+        # 3) 自动驾驶的公开开关:{key: "public" | "hidden"} 覆盖 yaml 里的 hidden
+        try:
+            r = _supabase_admin.table("app_settings").select("value") \
+                .eq("key", "persona_visibility_v1").execute()
+            if r.data and r.data[0].get("value"):
+                import json as _j
+                for k, v in (_j.loads(r.data[0]["value"]) or {}).items():
+                    if k in merged and v in ("public", "hidden"):
+                        merged[k] = {**merged[k], "hidden": v == "hidden"}
+        except Exception as e:
+            logger.warning(f"[personas] load visibility failed: {e}")
         return merged
     return _cached("personas_registry", 600, _load)
 
