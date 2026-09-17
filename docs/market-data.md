@@ -90,3 +90,24 @@
 | `POST /api/admin/market/run {"source": "fred"}` | 手动触发一次采集,`source` 为空则全部 |
 
 环境变量:`MARKET_COLLECTOR_ENABLED`(默认 `true`)、`MARKET_HISTORY_START`(首次回填起点,默认 `2000-01-01`)。
+
+## 人格周度市场解读
+
+在人格 YAML 里加 `weekly_report` 即可开启(示例见 `personas/shj.yaml`,每周一北京时间 9 点):
+
+```yaml
+weekly_report:
+  weekday: 0        # 0 = 周一
+  hour: 9
+  tz: Asia/Shanghai
+```
+
+引擎的 `WeeklyReporter`(`apps/api/api/weekly_report.py`)到点后生成一份以该人格第一人称写的周报,按四层框架组织:
+
+1. **数据由程序预处理**:每个指标写明对比日期、变化量和方向词(收益率与利差用 bp,利差收窄即曲线变平,CFTC 写净空头扩大或收窄),日期一律带星期
+2. **日历**:已由财政部公布的国债拍卖,以及按惯例推算的初请(每周四)和非农(每月第一个周五);未采集发布日的数据不写日期
+3. **观点引用**:按四层主题检索该人格观点库,正文用 `[N]` 引用原视频片段
+4. **两道生成**:初稿写完后再交给模型对照数据逐条核对数字、方向和日期,删除数据里没有的预期和新闻;若核对稿丢了引用则保留初稿
+
+结果存表 `weekly_reports`,前端 `/reports` 展示。接口:`GET /api/reports`、`GET /api/reports/{id}`、`POST /api/admin/reports/generate {"persona": "shj", "force": true}`(手动重生成,需 `X-Admin-Key`)。
+

@@ -59,7 +59,15 @@ function fmtNum(v?: number, digits = 2) {
 }
 
 function reading(p: SeriesPoint): { main: string; sub: string; up?: boolean } {
-  if (p.mom_diff !== undefined) return { main: `${p.mom_diff >= 0 ? "+" : ""}${fmtNum(p.mom_diff, 0)}`, sub: `环比 · ${p.date.slice(0, 7)}`, up: p.mom_diff >= 0 };
+  if (p.mom_diff !== undefined) {
+    // 人数类统一换算成「万人」:FRED 的非农单位是千人,ADP 是人
+    const persons = p.unit === "千人" ? p.mom_diff * 1000 : p.unit === "人" ? p.mom_diff : null;
+    const main = persons !== null
+      ? `${persons >= 0 ? "+" : ""}${(persons / 1e4).toFixed(1)}万人`
+      : `${p.mom_diff >= 0 ? "+" : ""}${fmtNum(p.mom_diff, 0)}`;
+    return { main, sub: `环比 · ${p.date.slice(0, 7)}`, up: p.mom_diff >= 0 };
+  }
+  if (p.unit === "人" && p.value >= 1e4) return { main: `${(p.value / 1e4).toFixed(1)}万人`, sub: p.date };
   if (p.yoy !== undefined) return { main: `${fmtNum(p.yoy)}%`, sub: `同比 · ${p.date.slice(0, 7)}` };
   if (p.chg_1w !== undefined) return { main: fmtNum(p.value), sub: `周变化 ${p.chg_1w >= 0 ? "+" : ""}${fmtNum(p.chg_1w)}`, up: p.chg_1w >= 0 };
   return { main: fmtNum(p.value), sub: p.date };
