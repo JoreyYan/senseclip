@@ -12,3 +12,7 @@ framework_key: shj_framework_v1
 kb_desc: 检索你自己过往每周市场概述视频的全部内容(你的记忆库),查你对某个市场、资产、宏观数据或行情阶段讲过什么
 hidden: true      # 资料入库、观点库和思维框架完成后由自动驾驶公开
 autopilot: true   # 引擎自动:增量建观点库 → 蒸馏框架 → 达标后公开
+weekly_report:     # 每周自动生成市场解读(需要引擎开启市场数据采集)
+  weekday: 0       # 0 = 周一
+  hour: 9
+  tz: Asia/Shanghai

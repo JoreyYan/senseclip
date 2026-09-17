@@ -2252,6 +2252,7 @@ from api.persona_builder import PersonaBuilder
 _persona_builder = PersonaBuilder(_supabase_admin) if _supabase_admin else None
 _persona_autopilot = None  # engine 启动时创建(依赖 _load_personas,定义在后面)
 _market_collector = None   # engine 启动时创建:宏观与市场数据采集
+_weekly_reporter = None    # engine 启动时创建:人格周度市场解读
 
 
 def _check_admin_key(x_admin_key: str) -> None:
@@ -2367,6 +2368,59 @@ async def persona_autopilot_status(x_admin_key: str = Header(None)):
         "builder": _persona_builder.status if _persona_builder else None,
         "channel_counts": (_backfill_worker.status.get("channel_counts") if _backfill_worker else None),
     }
+
+
+@app.get("/api/reports")
+async def list_reports(persona: str = "", limit: int = 20):
+    """周度市场解读列表(只含已完成的)。"""
+    q = _supabase_admin.table("weekly_reports").select("id,persona,week_start,title,updated_at") \
+        .eq("status", "done").order("week_start", desc=True).limit(max(1, min(limit, 100)))
+    if persona:
+        q = q.eq("persona", persona)
+    rows = q.execute().data or []
+    registry = _load_personas()
+    for r in rows:
+        cfg = registry.get(r["persona"]) or {}
+        r["label"] = cfg.get("label") or r["persona"]
+        r["avatar"] = cfg.get("avatar") or "/avatar.png"
+    return {"reports": rows}
+
+
+@app.get("/api/reports/{report_id}")
+async def get_report(report_id: str):
+    rows = (_supabase_admin.table("weekly_reports").select("*").eq("id", report_id)
+            .eq("status", "done").execute().data) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="report not found")
+    r = rows[0]
+    cfg = _load_personas().get(r["persona"]) or {}
+    r["label"] = cfg.get("label") or r["persona"]
+    r["avatar"] = cfg.get("avatar") or "/avatar.png"
+    return r
+
+
+class ReportGenerateRequest(BaseModel):
+    persona: str
+    force: bool = False
+
+
+@app.post("/api/admin/reports/generate")
+async def generate_report(request: ReportGenerateRequest, x_admin_key: str = Header(None)):
+    """手动生成本周解读(后台执行;force=true 覆盖本周已有的)。"""
+    _check_admin_key(x_admin_key)
+    if SERVICE_MODE != "engine" and ENGINE_URL:
+        return _proxy_to_engine("POST", "/api/admin/reports/generate",
+                                json_body={"persona": request.persona, "force": request.force},
+                                headers={"X-Admin-Key": x_admin_key})
+    if not _weekly_reporter:
+        raise HTTPException(status_code=503, detail="reporter not running")
+    cfg = _load_personas().get(request.persona)
+    if not cfg:
+        raise HTTPException(status_code=400, detail="unknown persona")
+    import threading as _th
+    _th.Thread(target=_weekly_reporter.generate, args=(request.persona, cfg),
+               kwargs={"force": request.force}, daemon=True).start()
+    return {"status": "triggered"}
 
 
 @app.get("/api/market/snapshot")
@@ -2509,6 +2563,17 @@ async def _resume_backfill_on_boot():
             logger.info("[market] collector started")
         except Exception as e:
             logger.warning(f"[market] collector start failed: {e}")
+    # 人格周度市场解读(依赖市场数据;personas/*.yaml 配 weekly_report 的人格)
+    global _weekly_reporter
+    if _market_collector and _supabase_admin:
+        try:
+            from api.weekly_report import WeeklyReporter
+            _weekly_reporter = WeeklyReporter(_supabase_admin, _load_personas, _persona_header,
+                                              _persona_framework, _embed_text)
+            _weekly_reporter.start()
+            logger.info("[weekly] reporter started")
+        except Exception as e:
+            logger.warning(f"[weekly] reporter start failed: {e}")
     # X 推文 poller 同样自动恢复
     if _x_poller:
         try:
