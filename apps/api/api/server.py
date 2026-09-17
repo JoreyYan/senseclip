@@ -2251,6 +2251,7 @@ _x_poller = XPoller(_supabase_admin, _TW_KEY) if _supabase_admin else None
 from api.persona_builder import PersonaBuilder
 _persona_builder = PersonaBuilder(_supabase_admin) if _supabase_admin else None
 _persona_autopilot = None  # engine 启动时创建(依赖 _load_personas,定义在后面)
+_market_collector = None   # engine 启动时创建:宏观与市场数据采集
 
 
 def _check_admin_key(x_admin_key: str) -> None:
@@ -2368,6 +2369,63 @@ async def persona_autopilot_status(x_admin_key: str = Header(None)):
     }
 
 
+@app.get("/api/market/snapshot")
+async def market_snapshot():
+    """按四层框架分组的最新宏观/市场数据快照(10 分钟缓存)。"""
+    if not _supabase_admin:
+        raise HTTPException(status_code=503, detail="Supabase unavailable")
+    from api.market_data import build_snapshot
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(_cached, "market_snapshot", 600, lambda: build_snapshot(_supabase_admin))
+
+
+@app.get("/api/market/series/{series_id}")
+async def market_series(series_id: str, since: str = "2020-01-01"):
+    if not _supabase_admin:
+        raise HTTPException(status_code=503, detail="Supabase unavailable")
+    meta = (_supabase_admin.table("market_series").select("*").eq("id", series_id).execute().data) or []
+    if not meta:
+        raise HTTPException(status_code=404, detail="unknown series")
+    rows, start = [], 0
+    while True:
+        page = (_supabase_admin.table("market_observations").select("obs_date,value")
+                .eq("series_id", series_id).gte("obs_date", since).order("obs_date")
+                .range(start, start + 999).execute().data) or []
+        rows.extend(page)
+        if len(page) < 1000:
+            break
+        start += 1000
+    return {"series": meta[0], "observations": rows}
+
+
+@app.get("/api/admin/market/status")
+async def market_status(x_admin_key: str = Header(None)):
+    _check_admin_key(x_admin_key)
+    if SERVICE_MODE != "engine" and ENGINE_URL:
+        return _proxy_to_engine("GET", "/api/admin/market/status", headers={"X-Admin-Key": x_admin_key})
+    series = (_supabase_admin.table("market_series").select("id,source,status,last_date,fetched_at,error")
+              .order("source").execute().data) if _supabase_admin else []
+    return {"collector": _market_collector.status if _market_collector else None, "series": series}
+
+
+class MarketRunRequest(BaseModel):
+    source: Optional[str] = ""
+
+
+@app.post("/api/admin/market/run")
+async def market_run(request: MarketRunRequest, x_admin_key: str = Header(None)):
+    """手动触发一次采集(source: fred/cboe/treasury/cftc,空 = 全部),后台执行。"""
+    _check_admin_key(x_admin_key)
+    if SERVICE_MODE != "engine" and ENGINE_URL:
+        return _proxy_to_engine("POST", "/api/admin/market/run",
+                                json_body={"source": request.source}, headers={"X-Admin-Key": x_admin_key})
+    if not _market_collector:
+        raise HTTPException(status_code=503, detail="collector not running")
+    import threading as _th
+    _th.Thread(target=_market_collector.run_now, args=(request.source or "",), daemon=True).start()
+    return {"status": "triggered", "source": request.source or "all"}
+
+
 @app.post("/api/admin/persona/stop")
 async def persona_build_stop(x_admin_key: str = Header(None)):
     _check_admin_key(x_admin_key)
@@ -2441,6 +2499,16 @@ async def _resume_backfill_on_boot():
             logger.info("[autopilot] started")
     except Exception as e:
         logger.warning(f"[autopilot] start failed: {e}")
+    # 宏观与市场数据采集(FRED / 财政部 / CFTC / CBOE),MARKET_COLLECTOR_ENABLED=false 可关闭
+    global _market_collector
+    if _env_bool("MARKET_COLLECTOR_ENABLED", True) and _supabase_admin:
+        try:
+            from api.market_data import MarketCollector
+            _market_collector = MarketCollector(_supabase_admin)
+            _market_collector.start()
+            logger.info("[market] collector started")
+        except Exception as e:
+            logger.warning(f"[market] collector start failed: {e}")
     # X 推文 poller 同样自动恢复
     if _x_poller:
         try:
