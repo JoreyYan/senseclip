@@ -44,7 +44,9 @@ RULES = """硬性规则(违反任何一条都算错):
 4. 日期与星期只能用数据和日历里给出的;没有给出日期的数据(如 CPI、PCE 的下次发布)不得写具体日期。
 5. 收益率、利差的变化用 bp 表述(1bp = 0.01 个百分点);不得做年化、折年换算,不得说"持仓 × 价格"之类数据里没有的推导。
 6. 全文中文,不夹英文缩写评级(如 LOW/HIGH);专有名词(VIX、CFTC、PCE 等)可保留。
-7. 不写"作为 AI"、不写免责声明、不写"我这里只有数据"之类出戏的话。"""
+7. 不写"作为 AI"、不写免责声明、不写"我这里只有数据"之类出戏的话。
+8. 不要给数字标注来源标记(不要写 [数据]、[来源] 之类);方括号只用于引用你过往观点的编号 [N]。
+9. [N] 是观点引用编号,不是数据数字:核对数字时不要把 [N] 当成数字删掉。"""
 
 REPORT_PROMPT = """{header}{framework}
 
@@ -88,7 +90,8 @@ AUDIT_PROMPT = """你是严格的财经编辑。下面是一篇以博主口吻�
 - 每个变化方向必须与数据里的方向词一致(特别注意:利差收窄=曲线变平;净空头减少=空头收窄)
 - 日期与星期必须与日历/数据一致;日历里没有的事件不得写日期
 - 删掉市场预期、一致预期、新闻/地缘事件、年化换算、数据里没有的推导
-- 保留原文的口吻、结构、观点和 [N] 引用标记,不要改写成官腔,不要加免责声明
+- 原文里的 [1]、[2] 这类方括号编号是对博主过往视频观点的引用,**必须原样保留在原句末尾**,不属于需要核对的数字
+- 保留原文的口吻、结构和观点,不要改写成官腔,不要加免责声明
 
 === 日历 ===
 {calendar}
@@ -270,6 +273,12 @@ class WeeklyReporter:
             except Exception as e:
                 logger.warning(f"[weekly] audit failed, keeping draft: {str(e)[:120]}")
             content = re.sub(r"^```(?:markdown)?\s*|\s*```\s*$", "", content.strip())
+            content = re.sub(r"\s*\[(?:数据|来源|data)\]", "", content)
+            # 核对稿若丢了初稿里的观点引用,保留初稿(引用是人格可信度的核心)
+            draft_refs = set(re.findall(r"\[(\d+)\]", draft))
+            if audited_ok and draft_refs and not re.findall(r"\[(\d+)\]", content):
+                logger.warning("[weekly] audit dropped all citations, keeping draft")
+                content, audited_ok = re.sub(r"\s*\[(?:数据|来源|data)\]", "", draft.strip()), False
 
             used = {int(x) for x in re.findall(r"\[(\d+)\]", content)}
             cites = [c for c in citations if c["ref_num"] in used]
@@ -279,7 +288,8 @@ class WeeklyReporter:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }).eq("persona", persona).eq("week_start", ws).execute()
             res = {"status": "done", "id": rid, "chars": len(content), "draft_chars": len(draft),
-                   "citations": len(cites), "audited": audited_ok}
+                   "citations": len(cites), "draft_citations": len(set(re.findall(r"\[(\d+)\]", draft))),
+                   "viewpoints_available": len(citations), "audited": audited_ok}
             logger.info(f"[weekly] {persona} {ws}: {res}")
             self.status["last_result"] = {"persona": persona, "week_start": ws, **res}
             return res
