@@ -424,7 +424,7 @@ def _derive(transform: str, obs: list) -> dict:
 
 def build_snapshot(supabase) -> dict:
     series = supabase.table("market_series").select("*").execute().data or []
-    since = (date.today() - timedelta(days=430)).isoformat()
+    since = (date.today() - timedelta(days=800)).isoformat()  # 月度数据发布滞后,同比需要足够回看
     layers: dict = {}
     for s in sorted(series, key=lambda x: (x["layer"], x["priority"] != "tier1", x["id"])):
         obs = (supabase.table("market_observations").select("obs_date,value")
