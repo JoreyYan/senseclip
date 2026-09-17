@@ -18,6 +18,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const BillingPage = lazy(() => import("./pages/BillingPage"));
 const SquarePage = lazy(() => import("./pages/SquarePage"));
 const NominatePage = lazy(() => import("./pages/NominatePage"));
+const ReportsPage = lazy(() => import("./pages/ReportsPage"));
 
 const queryClient = new QueryClient();
 
@@ -36,6 +37,7 @@ const App = () => (
               <Route path="/person-network" element={<Index />} />
               <Route path="/square" element={<SquarePage />} />
               <Route path="/nominate" element={<NominatePage />} />
+              <Route path="/reports" element={<ReportsPage />} />
               <Route path="/analysis" element={<AnalysisPage />} />
               <Route path="/ingest" element={<IngestPage />} />
               <Route path="/library" element={<LibraryPage />} />
