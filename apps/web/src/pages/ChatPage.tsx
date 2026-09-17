@@ -25,6 +25,9 @@ export default function ChatPage() {
   const [highlightedCitationIdx, setHighlightedCitationIdx] = useState<number | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>("standard");
   const abortRef = useRef<AbortController | null>(null);
+  // 本页刚新建的对话:消息已在内存里,不要再从数据库回读覆盖
+  // (新建对话时 setActiveConvId 会触发加载,而用户消息还没写进库,回读为空会把屏幕清掉)
+  const freshConvRef = useRef<string | null>(null);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
@@ -48,6 +51,7 @@ export default function ChatPage() {
   // Load messages when switching conversations
   useEffect(() => {
     if (!activeConvId || !user) return;
+    if (freshConvRef.current === activeConvId) return;
     supabase
       .from("chat_messages")
       .select("id, role, content, citations, created_at")
@@ -93,6 +97,7 @@ export default function ChatPage() {
               .single();
             if (data) {
               convId = data.id;
+              freshConvRef.current = data.id;
               setConversations((prev) => [data, ...prev]);
               setActiveConvId(data.id);
             }
@@ -109,6 +114,7 @@ export default function ChatPage() {
             created_at: new Date().toISOString(),
           };
           convId = newConv.id;
+          freshConvRef.current = newConv.id;
           setConversations((prev) => [newConv, ...prev]);
           setActiveConvId(newConv.id);
         }
@@ -202,11 +208,13 @@ export default function ChatPage() {
   );
 
   const handleNewConversation = useCallback(() => {
+    freshConvRef.current = null;
     setActiveConvId(null);
     setMessages([]);
   }, []);
 
   const handleSelectConversation = useCallback((id: string) => {
+    freshConvRef.current = null;
     setActiveConvId(id);
     // Messages will be loaded by the useEffect above
     if (!user) setMessages([]);
