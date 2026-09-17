@@ -109,7 +109,7 @@ export default function ReportsPage() {
     ? {
         id: detail.id,
         role: "assistant",
-        content: detail.content,
+        content: detail.content.replace(/^\s*#\s[^\n]*\n+/, ""),
         avatar: detail.avatar,
         citations: (detail.citations || []).map((c) => ({
           index: c.ref_num, atom_id: c.atom_id, video_id: c.video_id, text: c.text,
@@ -127,7 +127,7 @@ export default function ReportsPage() {
       {/* 期数列表 */}
       <aside className="hidden md:flex w-60 shrink-0 border-r border-border/30 flex-col">
         <div className="px-4 py-3 text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
-          <Newspaper className="h-3.5 w-3.5" /> 每周市场解读
+          <Newspaper className="h-3.5 w-3.5" /> Shanghao Jin 每周市场解读
         </div>
         <ScrollArea className="flex-1">
           <div className="px-2 pb-4 space-y-1">
@@ -147,7 +147,7 @@ export default function ReportsPage() {
                   <img src={it.avatar} alt="" className="h-5 w-5 rounded-full object-cover" />
                   <span className="font-medium">{it.label}</span>
                 </div>
-                <div className="mt-0.5 pl-7">{it.week_start} 当周</div>
+                <div className="mt-0.5 pl-7">{Number(it.week_start.slice(5, 7))}月{Number(it.week_start.slice(8, 10))}日当周</div>
               </button>
             ))}
           </div>
@@ -164,7 +164,7 @@ export default function ReportsPage() {
               onChange={(e) => setParams({ id: e.target.value })}
             >
               {items.map((it) => (
-                <option key={it.id} value={it.id}>{it.label} · {it.week_start} 当周</option>
+                <option key={it.id} value={it.id}>{it.label} 每周市场解读 · {it.week_start} 当周</option>
               ))}
             </select>
           )}

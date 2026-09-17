@@ -27,10 +27,10 @@ export function TopNav() {
   const navigate = useNavigate();
   const { user, role, credits, billingEnabled, signOut } = useAuth();
 
-  const navItems = [
+  const navItems: Array<{ to: string; label: string; short?: string; icon: typeof MessageSquare }> = [
     { to: "/", label: "对话", icon: MessageSquare },
     { to: "/square", label: "广场", icon: Users },
-    { to: "/reports", label: "周报", icon: Newspaper },
+    { to: "/reports", label: "Shanghao Jin 每周市场解读", short: "每周市场解读", icon: Newspaper },
     { to: "/person-network", label: "群英图", icon: GitGraph },
     { to: "/nominate", label: "提名", icon: Vote },
   ];
@@ -42,7 +42,7 @@ export function TopNav() {
           SenseClip
         </Link>
         <nav className="flex items-center gap-0.5 sm:gap-1 overflow-x-auto">
-          {navItems.map(({ to, label, icon: Icon }) => {
+          {navItems.map(({ to, label, short, icon: Icon }) => {
             const isActive = location.pathname === to;
             return (
               <Link
@@ -56,7 +56,12 @@ export function TopNav() {
                 )}
               >
                 <Icon className="hidden sm:block h-3.5 w-3.5" />
-                {label}
+                {short ? (
+                  <>
+                    <span className="hidden sm:inline">{label}</span>
+                    <span className="sm:hidden">{short}</span>
+                  </>
+                ) : label}
               </Link>
             );
           })}

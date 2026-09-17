@@ -231,7 +231,7 @@ class WeeklyReporter:
             if existing and existing[0]["status"] == "done" and not force:
                 return {"status": "exists", "id": existing[0]["id"]}
             row = {"persona": persona, "week_start": ws, "status": "running",
-                   "title": f"{cfg['label']} · {week_start.month}月{week_start.day}日当周市场解读",
+                   "title": f"{cfg['label']} 每周市场解读 · {week_start.month}月{week_start.day}日当周",
                    "updated_at": datetime.now(timezone.utc).isoformat()}
             rid = (self.supabase.table("weekly_reports").upsert(row, on_conflict="persona,week_start")
                    .execute().data or [{}])[0].get("id")
@@ -274,6 +274,7 @@ class WeeklyReporter:
                 logger.warning(f"[weekly] audit failed, keeping draft: {str(e)[:120]}")
             content = re.sub(r"^```(?:markdown)?\s*|\s*```\s*$", "", content.strip())
             content = re.sub(r"\s*\[(?:数据|来源|data)\]", "", content)
+            content = re.sub(r"^\s*#\s[^\n]*\n+", "", content)  # 页面已有统一标题
             # 核对稿若丢了初稿里的观点引用,保留初稿(引用是人格可信度的核心)
             draft_refs = set(re.findall(r"\[(\d+)\]", draft))
             if audited_ok and draft_refs and not re.findall(r"\[(\d+)\]", content):
