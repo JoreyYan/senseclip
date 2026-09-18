@@ -260,7 +260,7 @@ export default function ChatPage() {
 
       <div className="flex-1 flex flex-col min-w-0">
         {isEmpty ? (
-          <WelcomeScreen onSelectQuestion={handleSend} />
+          <WelcomeScreen onSelectQuestion={handleSend} onPickPersona={setChatMode} />
         ) : (
           <ScrollArea className="flex-1">
             <div className="max-w-5xl mx-auto py-6 px-4 space-y-6">

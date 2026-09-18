@@ -2994,11 +2994,25 @@ _PERSONA_DEFAULTS = {
 @app.get("/api/personas")
 async def list_personas():
     """公开人格列表,前端模式选择器动态渲染(新增博主零前端改动)。"""
+    def _published_map():
+        try:
+            r = _supabase_admin.table("app_settings").select("value") \
+                .eq("key", "persona_autopilot_v1").execute()
+            if r.data and r.data[0].get("value"):
+                import json as _j
+                return {k: (v or {}).get("published_at")
+                        for k, v in (_j.loads(r.data[0]["value"]) or {}).items()}
+        except Exception as e:
+            logger.warning(f"[personas] published map failed: {e}")
+        return {}
+
+    published = _cached("persona_published", 600, _published_map)
     out = []
     for key, cfg in _public_personas().items():
         out.append({"key": key, "label": cfg["label"],
                     "desc": cfg.get("desc") or "",
                     "avatar": cfg.get("avatar") or "/avatar.png",
+                    "published_at": published.get(key),
                     "cost": LU_CONSULT_COST if BILLING_ENABLED else 0})
     return {"personas": out}
 

@@ -28,6 +28,7 @@ export interface PersonaInfo {
   desc: string;
   cost: number;
   avatar?: string;
+  published_at?: string | null;   // 自动驾驶公开时间,前端据此标「新上线」
 }
 
 let _personasCache: PersonaInfo[] | null = null;
